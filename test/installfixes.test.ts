@@ -184,6 +184,17 @@ test("an install from before the approval setting gets that one line added in pl
   });
 });
 
+test("a hooks.json that does not parse still lets uninstall remove the MCP tables, and the run fails", async () => {
+  const codex = tempDir("agentsocks-badhooks-");
+  await withCodexHome(codex, async () => {
+    await install({ claude: false, codexMcp: true, codexHooks: false, trustHooks: false, dryRun: false, agents: [] });
+    writeFileSync(join(codex, "hooks.json"), "{ not json");
+    const out = uninstall(false);
+    assert.equal(out.failed, true);
+    assert.ok(!existsSync(join(codex, "config.toml")) || !readFileSync(join(codex, "config.toml"), "utf8").includes("mcp_servers.agentsocks"));
+  });
+});
+
 test("a Codex file that cannot be read does not stop the other agents from being wired or unwired, and the run still fails", async () => {
   const codex = tempDir("agentsocks-badcodex-");
   writeFileSync(join(codex, "hooks.json"), "{ not json");

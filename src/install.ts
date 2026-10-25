@@ -134,18 +134,62 @@ export function codexMcpBlock(): string {
   );
 }
 
-const TABLE_HEADER = /^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(#.*)?$/;
+// The decoded dotted key of a TOML table header line ([a."b c"] or [[a.b]]), or undefined when the line is not one.
+// Quote-aware: a quoted key may hold spaces, dots or brackets, as Codex's plugin hook keys do ("…#hooks[0]:stop:0:0").
+// A basic string JSON cannot decode (TOML's \U escapes) stays as its raw text, so it is still a header, never ours.
+export function tableHeaderKey(line: string): string[] | undefined {
+  const s = line.trim();
+  if (!s.startsWith("[")) return undefined;
+  const close = s.startsWith("[[") ? "]]" : "]";
+  let i = close.length;
+  const parts: string[] = [];
+  const blank = () => {
+    while (s[i] === " " || s[i] === "\t") i++;
+  };
+  for (;;) {
+    blank();
+    if (s[i] === '"') {
+      let j = i + 1;
+      while (j < s.length && s[j] !== '"') j += s[j] === "\\" ? 2 : 1;
+      if (j >= s.length) return undefined;
+      const raw = s.slice(i, j + 1);
+      try {
+        parts.push(JSON.parse(raw) as string);
+      } catch {
+        parts.push(raw);
+      }
+      i = j + 1;
+    } else if (s[i] === "'") {
+      const j = s.indexOf("'", i + 1);
+      if (j === -1) return undefined;
+      parts.push(s.slice(i + 1, j));
+      i = j + 1;
+    } else {
+      const bare = /^[A-Za-z0-9_-]+/.exec(s.slice(i))?.[0];
+      if (!bare) return undefined;
+      parts.push(bare);
+      i += bare.length;
+    }
+    blank();
+    if (s[i] !== ".") break;
+    i++;
+  }
+  if (!s.startsWith(close, i)) return undefined;
+  const rest = s.slice(i + close.length).trim();
+  return rest === "" || rest.startsWith("#") ? parts : undefined;
+}
 
-export function removeAgentsocksTables(toml: string): { text: string; removed: number } {
+// hookKeys: the hooks.json keys of our hooks, whose [hooks.state."<key>"] trust tables (written by trustCodexHooks) go too
+export function removeAgentsocksTables(toml: string, hookKeys: string[] = []): { text: string; removed: number } {
   const lines = toml.split("\n");
   const out: string[] = [];
+  const trusted = new Set(hookKeys);
   let skipping = false;
   let removed = 0;
   for (const line of lines) {
-    const header = line.match(TABLE_HEADER);
-    if (header) {
-      const name = header[1]!.replace(/\s+/g, "");
-      skipping = name === `mcp_servers.${MARKER}` || name.startsWith(`mcp_servers.${MARKER}.`);
+    const key = tableHeaderKey(line);
+    if (key) {
+      skipping = (key[0] === "mcp_servers" && key[1] === MARKER) || (key.length === 3 && key[0] === "hooks" && key[1] === "state" && trusted.has(key[2]!));
       if (skipping) {
         removed++;
         continue;
@@ -241,7 +285,7 @@ function agentsocksMcpBlock(toml: string): string | undefined {
   if (start === -1) return undefined;
   let end = lines.length;
   for (let i = start + 1; i < lines.length; i++) {
-    if (TABLE_HEADER.test(lines[i]!)) {
+    if (tableHeaderKey(lines[i]!)) {
       end = i;
       break;
     }
@@ -746,9 +790,16 @@ function uninstallClaudeAndCodex(dryRun: boolean, log: string[]): void {
     log.push(dryRun ? "claude: would remove MCP server 'agentsocks'" : "claude: removed MCP server 'agentsocks'");
   }
   const configPath = join(codexHome(), "config.toml");
+  const hooksPath = join(codexHome(), "hooks.json");
+  let hookKeys: string[] = [];
+  try {
+    if (existsSync(hooksPath)) hookKeys = ourHookKeys(hooksPath, JSON.parse(readFileSync(hooksPath, "utf8")));
+  } catch {
+    // a hooks.json that does not parse is reported below; it must not stop the MCP tables from going
+  }
   if (existsSync(configPath)) {
     const current = readFileSync(configPath, "utf8");
-    const { text, removed } = removeAgentsocksTables(current);
+    const { text, removed } = removeAgentsocksTables(current, hookKeys);
     if (removed > 0) {
       if (!dryRun) backup(configPath, log);
       if (!dryRun && text.trim() === "") {
@@ -766,7 +817,6 @@ function uninstallClaudeAndCodex(dryRun: boolean, log: string[]): void {
       }
     }
   }
-  const hooksPath = join(codexHome(), "hooks.json");
   if (existsSync(hooksPath)) {
     const { doc, changed } = removeCodexHooks(JSON.parse(readFileSync(hooksPath, "utf8")));
     if (changed) {

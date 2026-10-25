@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { noticeLine, renderForCodex, wakeLine } from "../src/codexframe.ts";
 import { InboundLimiter, bodyTooLarge } from "../src/limits.ts";
 import { Store, MAX_QUEUED_PER_THREAD, type MessageRow } from "../src/store.ts";
-import { addCodexHooks, codexMcpBlock, ourHookKeys, removeAgentsocksTables, removeCodexHooks, shellQuote } from "../src/install.ts";
+import { addCodexHooks, codexMcpBlock, ourHookKeys, removeAgentsocksTables, removeCodexHooks, shellQuote, tableHeaderKey } from "../src/install.ts";
 import { codexHookOutput, hookRequest } from "../src/hooks.ts";
 import { modeFromCodex } from "../src/broker.ts";
 
@@ -131,6 +131,58 @@ test("hook appends groups after existing ones and is idempotent", () => {
   assert.ok(codexMcpBlock().includes("[mcp_servers.agentsocks]"));
   assert.ok(codexMcpBlock().includes('"mcp", "--host", "codex"'));
   assert.ok(codexMcpBlock().includes('default_tools_approval_mode = "approve"'));
+});
+
+test("uninstall also removes the hook trust tables Codex wrote for our hooks, and no one else's", () => {
+  const ours = "/h/.codex/hooks.json:session_start:1:0";
+  const toml = [
+    "[mcp_servers.agentsocks]",
+    'command = "node"',
+    "",
+    `[hooks.state.${JSON.stringify(ours)}]`,
+    'trusted_hash = "aaaa"',
+    "",
+    '[hooks.state."/h/.codex/hooks.json:stop:0:0"]',
+    'trusted_hash = "bbbb"',
+    "",
+    "[projects.\"/p\"]",
+    'trust_level = "trusted"',
+  ].join("\n");
+  const { text, removed } = removeAgentsocksTables(toml, [ours]);
+  assert.equal(removed, 2);
+  assert.ok(!text.includes("aaaa"));
+  assert.ok(text.includes('trusted_hash = "bbbb"'));
+  assert.ok(text.includes('trust_level = "trusted"'));
+  assert.equal(removeAgentsocksTables(toml).removed, 1, "without keys only the server tables go");
+});
+
+test("a table header is read with its quotes, so brackets, dots and spaces inside a quoted key are part of the key", () => {
+  assert.deepEqual(tableHeaderKey('[hooks.state."browser@openai-bundled:plugin.json#hooks[0]:stop:0:0"]'), ["hooks", "state", "browser@openai-bundled:plugin.json#hooks[0]:stop:0:0"]);
+  assert.deepEqual(tableHeaderKey(' [ mcp_servers . agentsocks ] # ours'), ["mcp_servers", "agentsocks"]);
+  assert.deepEqual(tableHeaderKey("[[a.'b.c']]"), ["a", "b.c"]);
+  assert.deepEqual(tableHeaderKey('[a."x\\"y"]'), ["a", 'x"y']);
+  assert.equal(tableHeaderKey('args = ["[x]"]'), undefined);
+  assert.equal(tableHeaderKey('[a."unterminated]'), undefined);
+  assert.equal(tableHeaderKey("[a] trailing"), undefined);
+});
+
+test("removing our hook trust tables keeps a plugin trust table with brackets after them, and a key that differs only by a space", () => {
+  const ours = "/h/a b/hooks.json:stop:0:0";
+  const toml = [
+    `[hooks.state.${JSON.stringify(ours)}]`,
+    'trusted_hash = "ours"',
+    "",
+    '[hooks.state."browser@openai-bundled:plugin.json#hooks[0]:stop:0:0"]',
+    'trusted_hash = "plugin"',
+    "",
+    '[hooks.state."/h/ab/hooks.json:stop:0:0"]',
+    'trusted_hash = "neighbour"',
+  ].join("\n");
+  const { text, removed } = removeAgentsocksTables(toml, [ours]);
+  assert.equal(removed, 1);
+  assert.ok(!text.includes('"ours"'));
+  assert.ok(text.includes('trusted_hash = "plugin"'));
+  assert.ok(text.includes('trusted_hash = "neighbour"'));
 });
 
 test("hook input and output follow the Codex schema", () => {
