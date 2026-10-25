@@ -112,7 +112,7 @@ export function mcpServerConfig() {
     command: node!,
     args: [cli!, "mcp", "--host", "codex"],
     env: { NODE_NO_WARNINGS: "1" },
-    env_vars: ["XDG_RUNTIME_DIR", "TMPDIR", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "CLAUDE_CONFIG_DIR", "AGENTSOCKS_RUNTIME_DIR", "AGENTSOCKS_STATE_DIR"],
+    env_vars: ["XDG_RUNTIME_DIR", "TMPDIR", "CLAUDE_CODE_TMPDIR", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "CLAUDE_CONFIG_DIR", "AGENTSOCKS_RUNTIME_DIR", "AGENTSOCKS_STATE_DIR"],
     startup_timeout_sec: 20,
     tool_timeout_sec: 300,
   };

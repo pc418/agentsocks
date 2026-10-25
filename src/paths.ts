@@ -35,8 +35,10 @@ export function runtimeDirFor(c: SocketContext): string {
   return c.platform !== "darwin" || fits(join(inTmpdir, "t", `${LONGEST_THREAD_ID}.sock`), c.platform) ? inTmpdir : short;
 }
 
+// Claude Code binds <XDG_RUNTIME_DIR || CLAUDE_CODE_TMPDIR || /tmp>/cc-socks/<pid>.sock; it does not read TMPDIR, so on macOS
+// (TMPDIR under /var/folders) its directory is /tmp/cc-socks. os.tmpdir() stays a candidate for older builds.
 export function claudeSocketDirs(c: SocketContext): string[] {
-  const bases = c.env.XDG_RUNTIME_DIR ? [c.env.XDG_RUNTIME_DIR] : [...(c.standardRuntime ? [c.standardRuntime] : []), c.tmpdir];
+  const bases = c.env.XDG_RUNTIME_DIR ? [c.env.XDG_RUNTIME_DIR] : [...(c.standardRuntime ? [c.standardRuntime] : []), c.tmpdir, c.env.CLAUDE_CODE_TMPDIR || tmpBase(c)];
   return [...new Set([...bases.map((base) => join(base, "cc-socks")), join(tmpBase(c), `cc-socks-${c.uid}`)])];
 }
 

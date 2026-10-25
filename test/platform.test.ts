@@ -36,9 +36,9 @@ test("Linux with neither: the runtime directory is under os.tmpdir(), as in v0.2
   assert.equal(runtimeDirFor(context({ tmpdir: `/var/tmp/${"z".repeat(70)}` })), `/var/tmp/${"z".repeat(70)}/agentsocks-1000`);
 });
 
-test("macOS: Claude's directory is under os.tmpdir(), and our runtime directory is /tmp, which Claude accepts as a reply target", () => {
+test("macOS: Claude's directory is under os.tmpdir() or /tmp (Claude Code 2.1.3xx binds /tmp/cc-socks there), and our runtime directory is /tmp, which Claude accepts as a reply target", () => {
   const c = context({ platform: "darwin", uid: 501, tmpdir: MAC_TMP });
-  assert.deepEqual(claudeSocketDirs(c), [`${MAC_TMP}/cc-socks`, "/tmp/cc-socks-501"]);
+  assert.deepEqual(claudeSocketDirs(c), [`${MAC_TMP}/cc-socks`, "/tmp/cc-socks", "/tmp/cc-socks-501"]);
   assert.equal(runtimeDirFor(c), "/tmp/agentsocks-501");
   assert.equal(runtimeDirFor(context({ platform: "darwin", uid: 501, tmpdir: "/tmp" })), "/tmp/agentsocks-501");
 });
@@ -82,8 +82,8 @@ test("a namespaced socket name has to fit sun_path: 103 bytes on macOS, 107 on L
   const tmpdir = `${dir}/${"e".repeat(12)}`;
   const probe = (platform: NodeJS.Platform) => namespaceDirs(context({ platform, tmpdir }));
   assert.equal(Buffer.byteLength(join(tmpdir, "cc-socks", `a${"0".repeat(15)}.sock`)), 105);
-  assert.deepEqual(probe("linux"), [join(tmpdir, "cc-socks"), "/tmp/cc-socks-1000"]);
-  assert.deepEqual(probe("darwin"), ["/tmp/cc-socks-1000"]);
+  assert.deepEqual(probe("linux"), [join(tmpdir, "cc-socks"), "/tmp/cc-socks", "/tmp/cc-socks-1000"]);
+  assert.deepEqual(probe("darwin"), ["/tmp/cc-socks", "/tmp/cc-socks-1000"]);
 });
 
 test("the name length the directory check assumes is the length of a real hex name", () => {
@@ -188,6 +188,15 @@ test("on a simulated Mac the broker finds Claude's cc-socks directory under TMPD
   });
 });
 
+test("on a simulated Mac with no cc-socks under TMPDIR the broker looks at /tmp/cc-socks, where Claude Code actually binds", () => {
+  const tmp = tempDir("as-mac-");
+  const c = context({ platform: "darwin", uid: 501, tmpdir: tmp });
+  assert.deepEqual(claudeSocketDirs(c), [join(tmp, "cc-socks"), "/tmp/cc-socks", "/tmp/cc-socks-501"]);
+  assert.deepEqual(claudeSocketDirs(context({ platform: "darwin", uid: 501, tmpdir: "/tmp" })), ["/tmp/cc-socks", "/tmp/cc-socks-501"]);
+  assert.deepEqual(claudeSocketDirs(context({ platform: "darwin", uid: 501, tmpdir: tmp, env: { XDG_RUNTIME_DIR: "/run/user/501" } })), ["/run/user/501/cc-socks", "/tmp/cc-socks-501"]);
+  assert.deepEqual(claudeSocketDirs(context({ platform: "darwin", uid: 501, tmpdir: tmp, env: { CLAUDE_CODE_TMPDIR: "/private/ct" } })), [join(tmp, "cc-socks"), "/private/ct/cc-socks", "/tmp/cc-socks-501"]);
+});
+
 test("on a simulated Mac a cc-socks directory that does not exist is not created for us", () => {
   const tmp = tempDir("as-mac-");
   const getuid = process.getuid;
@@ -235,6 +244,7 @@ test("validToml judges real files when python3 can parse TOML", (t) => {
 
 test("Codex passes TMPDIR to the MCP server, so a broker started there finds the same temp directory Claude Code uses", () => {
   assert.ok(mcpServerConfig().env_vars.includes("TMPDIR"));
+  assert.ok(mcpServerConfig().env_vars.includes("CLAUDE_CODE_TMPDIR"), "Claude Code reads it for its cc-socks directory, so the broker has to see it too");
 });
 
 test("package.json and its lockfile do not restrict os, so npm installs on Termux (android) and the code fails open where a platform is unsupported", () => {
