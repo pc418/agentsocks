@@ -145,6 +145,45 @@ test("a flag install does not know is an error, not a full install; naming an ag
   assert.equal(unknownUninstall.status, 1);
 });
 
+async function withCodexHome<T>(codex: string, run: () => Promise<T> | T): Promise<T> {
+  const saved = { codex: process.env.CODEX_HOME, path: process.env.PATH, home: process.env.HOME };
+  process.env.CODEX_HOME = codex;
+  process.env.PATH = tempDir("agentsocks-nopath-"); // no codex, so the config is edited directly
+  process.env.HOME = tempDir("agentsocks-home-");
+  try {
+    return await run();
+  } finally {
+    process.env.CODEX_HOME = saved.codex;
+    process.env.PATH = saved.path;
+    process.env.HOME = saved.home;
+  }
+}
+
+test("an install from before the approval setting gets that one line added in place when Codex's config API is not there", async () => {
+  const codex = tempDir("agentsocks-upgrade-");
+  const config = join(codex, "config.toml");
+  await withCodexHome(codex, async () => {
+    await install({ claude: false, codexMcp: true, codexHooks: false, trustHooks: false, dryRun: false, agents: [] });
+    const fresh = readFileSync(config, "utf8");
+    assert.match(fresh, /default_tools_approval_mode = "approve"/);
+    const old = `${fresh.replace('default_tools_approval_mode = "approve"\n', "")}\n[mcp_servers.agentsocks.tools.send_message]\napproval = true\n`;
+    writeFileSync(config, old);
+    const log = await install({ claude: false, codexMcp: true, codexHooks: false, trustHooks: false, dryRun: false, agents: [] });
+    assert.match(log.join("\n"), /added default_tools_approval_mode/);
+    const upgraded = readFileSync(config, "utf8");
+    assert.equal(upgraded.match(/default_tools_approval_mode/g)?.length, 1);
+    assert.ok(upgraded.indexOf("default_tools_approval_mode") < upgraded.indexOf("[mcp_servers.agentsocks.env]") || !upgraded.includes("[mcp_servers.agentsocks.env]"));
+    assert.ok(upgraded.includes("[mcp_servers.agentsocks.tools.send_message]\napproval = true"), "the rest of the table stays");
+    writeFileSync(config, upgraded.replace('default_tools_approval_mode = "approve"', 'default_tools_approval_mode = "prompt"'));
+    await install({ claude: false, codexMcp: true, codexHooks: false, trustHooks: false, dryRun: false, agents: [] });
+    assert.match(readFileSync(config, "utf8"), /default_tools_approval_mode = "prompt"/, "a value the user chose is kept");
+    writeFileSync(config, upgraded.replace('default_tools_approval_mode = "approve"', `"default_tools_approval_mode" = 'prompt'`));
+    const quoted = await install({ claude: false, codexMcp: true, codexHooks: false, trustHooks: false, dryRun: false, agents: [] });
+    assert.ok(!quoted.failed, quoted.join("\n"));
+    assert.equal(readFileSync(config, "utf8").match(/default_tools_approval_mode/g)?.length, 1, "a quoted key is the same key: no second one");
+  });
+});
+
 test("a Codex file that cannot be read does not stop the other agents from being wired or unwired, and the run still fails", async () => {
   const codex = tempDir("agentsocks-badcodex-");
   writeFileSync(join(codex, "hooks.json"), "{ not json");

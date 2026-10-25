@@ -115,8 +115,14 @@ export function mcpServerConfig() {
     env_vars: ["XDG_RUNTIME_DIR", "TMPDIR", "CLAUDE_CODE_TMPDIR", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "CLAUDE_CONFIG_DIR", "AGENTSOCKS_RUNTIME_DIR", "AGENTSOCKS_STATE_DIR"],
     startup_timeout_sec: 20,
     tool_timeout_sec: 300,
+    // with approval_policy = "never" Codex refuses every MCP tool that would need approval, read-only ones included
+    default_tools_approval_mode: "approve",
   };
 }
+
+const APPROVAL_LINE = 'default_tools_approval_mode = "approve"';
+// the key in any of its TOML spellings (bare, "basic" or 'literal'), so a value the user set is seen and kept
+const APPROVAL_KEY = /^\s*(?:default_tools_approval_mode|"default_tools_approval_mode"|'default_tools_approval_mode')\s*=/m;
 
 export function codexMcpBlock(): string {
   const c = mcpServerConfig();
@@ -124,7 +130,7 @@ export function codexMcpBlock(): string {
   return (
     `\n[mcp_servers.${MARKER}]\ncommand = ${q(c.command)}\nargs = [${c.args.map((a) => q(a)).join(", ")}]\n` +
     `env = { NODE_NO_WARNINGS = "1" }\nenv_vars = [${c.env_vars.map((v) => q(v)).join(", ")}]\n` +
-    `startup_timeout_sec = ${c.startup_timeout_sec}\ntool_timeout_sec = ${c.tool_timeout_sec}\n`
+    `startup_timeout_sec = ${c.startup_timeout_sec}\ntool_timeout_sec = ${c.tool_timeout_sec}\ndefault_tools_approval_mode = ${q(c.default_tools_approval_mode)}\n`
   );
 }
 
@@ -273,7 +279,11 @@ function staleAgentsocksCli(block: string): string | undefined {
     const server = new AppServer();
     try {
       await server.open();
-      await server.call("config/value/write", { keyPath: `mcp_servers.${MARKER}`, value: mcpServerConfig(), mergeStrategy: "upsert" });
+      // the upsert merges into the table; a default_tools_approval_mode already there is the user's choice and stays
+      const existing = agentsocksMcpBlock(existsSync(path) ? readFileSync(path, "utf8") : "");
+      const { default_tools_approval_mode, ...rest } = mcpServerConfig();
+      const value = existing !== undefined && APPROVAL_KEY.test(existing) ? rest : { ...rest, default_tools_approval_mode };
+      await server.call("config/value/write", { keyPath: `mcp_servers.${MARKER}`, value, mergeStrategy: "upsert" });
       log.push(`codex: set [mcp_servers.agentsocks] in ${path} through Codex's config API`);
       return;
     } catch (err) {
@@ -287,6 +297,18 @@ function staleAgentsocksCli(block: string): string | undefined {
   const block = agentsocksMcpBlock(current);
   if (block !== undefined) {
     if (block.includes(cliEntry())) {
+      if (!APPROVAL_KEY.test(block)) {
+        // an install from before the approval setting: add the one line, keep everything else in the table as it is
+        const at = current.indexOf(block) + block.indexOf("\n");
+        const next = block.includes("\n") ? `${current.slice(0, at)}\n${APPROVAL_LINE}${current.slice(at)}` : `${current.replace(/\s*$/, "")}\n${APPROVAL_LINE}\n`;
+        writeFileSync(path, next, { mode: 0o600 });
+        if (validToml(path) === false) {
+          writeFileSync(path, current, { mode: 0o600 });
+          throw new Error(`codex config became invalid TOML after the edit; restored ${path}`);
+        }
+        log.push(`codex: added ${APPROVAL_LINE} to [mcp_servers.agentsocks] in ${path}`);
+        return;
+      }
       log.push(`codex: [mcp_servers.agentsocks] already present in ${path}; left as is`);
       return;
     }

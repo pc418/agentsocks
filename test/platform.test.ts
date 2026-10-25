@@ -245,6 +245,7 @@ test("validToml judges real files when python3 can parse TOML", (t) => {
 test("Codex passes TMPDIR to the MCP server, so a broker started there finds the same temp directory Claude Code uses", () => {
   assert.ok(mcpServerConfig().env_vars.includes("TMPDIR"));
   assert.ok(mcpServerConfig().env_vars.includes("CLAUDE_CODE_TMPDIR"), "Claude Code reads it for its cc-socks directory, so the broker has to see it too");
+  assert.equal(mcpServerConfig().default_tools_approval_mode, "approve", "approval_policy = \"never\" otherwise refuses the tools");
 });
 
 test("package.json and its lockfile do not restrict os, so npm installs on Termux (android) and the code fails open where a platform is unsupported", () => {

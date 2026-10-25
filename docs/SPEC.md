@@ -173,7 +173,9 @@ sender natively with `SendMessage` to the `from=` address. Metrics (`stats`) are
 
 `agentsocks install` (idempotent, backups to `~/.local/state/agentsocks/backups/<ts>/`):
 - Claude: `claude mcp add -s user agentsocks -- <node> <dist>/cli.js mcp --host claude`.
-- Codex MCP: appends `[mcp_servers.agentsocks]` to `~/.codex/config.toml` if absent.
+- Codex MCP: appends `[mcp_servers.agentsocks]` to `~/.codex/config.toml` if absent, with
+  `default_tools_approval_mode = "approve"`: under `approval_policy = "never"` Codex refuses every MCP tool
+  that would need approval, `read_inbox` included.
 - Codex hooks: appends one new group per event to `~/.codex/hooks.json`, **after** all existing
   groups (Codex keys hook trust by position; reordering would untrust existing hooks). Then it marks
   its own five hooks trusted through Codex's app-server API (`hooks/list` for the key and hash,

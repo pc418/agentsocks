@@ -58,7 +58,8 @@ Delivered. They see it at their next tool call, or right away if idle.
 `~/.local/state/agentsocks/backups/`. It:
 
 - registers the `agentsocks` MCP server with Claude Code at user scope;
-- adds `[mcp_servers.agentsocks]` to `~/.codex/config.toml`;
+- adds `[mcp_servers.agentsocks]` to `~/.codex/config.toml`, with `default_tools_approval_mode = "approve"` so the
+  tools also work under `approval_policy = "never"`, where Codex otherwise refuses every MCP tool call;
 - appends five hooks to `~/.codex/hooks.json`, after your existing ones, so your hooks keep their
   positions and their trust;
 - marks those five hooks trusted through Codex's own config API. Use `--no-trust-hooks` if you would

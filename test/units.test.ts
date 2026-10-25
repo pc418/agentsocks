@@ -130,6 +130,7 @@ test("hook appends groups after existing ones and is idempotent", () => {
   assert.equal(addCodexHooks(doc).added.length, 0);
   assert.ok(codexMcpBlock().includes("[mcp_servers.agentsocks]"));
   assert.ok(codexMcpBlock().includes('"mcp", "--host", "codex"'));
+  assert.ok(codexMcpBlock().includes('default_tools_approval_mode = "approve"'));
 });
 
 test("hook input and output follow the Codex schema", () => {
