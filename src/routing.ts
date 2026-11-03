@@ -134,8 +134,10 @@ function wakeNote(wake: WakeReport): string {
 
 export function deliveryNote(result: Pick<RouteSendResult, "decision" | "status" | "to" | "wake">, urgency: Urgency, visible?: readonly string[]): string {
   const { decision } = result;
-  if (decision.rule === NOT_FROM_DRIVER_RULE && decision.driverName)
-    return driverInfoNote(result.to.name, visible !== undefined && !visible.includes(decision.driverName) ? null : decision.driverName);
+  if (decision.rule === NOT_FROM_DRIVER_RULE && decision.driverName) {
+    const info = driverInfoNote(result.to.name, visible !== undefined && !visible.includes(decision.driverName) ? null : decision.driverName);
+    return result.wake ? `${info} ${wakeNote(result.wake)}` : info;
+  }
   const escalate = urgency === "urgent" ? "" : " Send with urgency urgent if it cannot wait.";
   const replaces = decision.escalates ? " It repeats the same text that was still waiting." : "";
   if (result.wake && (decision.route === "now" || decision.route === "pause")) return `${wakeNote(result.wake)}${replaces}`;

@@ -202,8 +202,8 @@ is doing and how many messages it has already had:
 
 | Route | Meaning | Claude receiver | Codex receiver |
 |---|---|---|---|
-| `now` | At the receiver's next tool call, or at once if it is idle | priority `next` | announced at the next tool call; wakes an idle session |
-| `pause` | When the receiver's current turn ends | priority `later` | not announced mid-turn; blocks `Stop` once; wakes an idle session |
+| `now` | At the receiver's next tool call, or at once if it is idle | priority `next` | announced at the next tool call; wakes an idle session, and the sender is told whether the wake went out |
+| `pause` | When the receiver's current turn ends | priority `later` | not announced mid-turn; blocks `Stop` once; wakes an idle session, and the sender is told whether the wake went out |
 | `digest` | Batch it | held, then one combined message (split if it is large) when the session is idle or after 15 minutes | held, released when the session is idle, reads its inbox or after 15 minutes; never wakes anyone |
 | `merge` | Same text already delivered in the last 10 minutes | recorded, not delivered | recorded, not delivered |
 
@@ -226,10 +226,32 @@ own `SendMessage`, say) is routed the same way, but it has no outbox row: if it 
 audit log records that. What the sender is told is one sentence, for example "Delivered. They
 see it at their next tool call, or right away if idle."
 
+When the receiver is an idle Codex session, `send_message` and `agentsocks send` wait for the wake,
+at most 10 seconds, and say what became of it:
+
+- "Delivered, and Codex accepted the request to wake them, so they start a turn and read it
+  shortly." `codex queue` took the wake line. That does not prove the turn has started yet.
+- "Queued, NOT woken: the wake failed (<the error>). They see it at their next tool call or the
+  next time a turn starts. The wake is retried with backoff."
+- "Queued, NOT woken: <reason>. ...", when no wake was attempted: the retry wait after a failure
+  (with the time to the next retry), the hourly limit, the typing guard, an earlier wake that has
+  not started their turn yet, or waking turned off with `AGENTSOCKS_WAKE=0`.
+- "Queued; the request to wake them has not answered yet, so the wake is not confirmed. Check
+  message_status with this message id." when the wake is still running at 10 seconds.
+
+`agentsocks status <msg-id>` (and `message_status`) says whether a wake was accepted for that
+message, and while it is unread, the receiver's latest wake failure. `agentsocks status <session>`
+(and `peer_status`) shows the session's last accepted wake or its latest failure and how many failed
+in a row. A message that a driven worker gets as information only is reported the same way, after the
+information note. Wake errors are stored and shown with secrets redacted. Messages sent through a
+channel, an ask or a task, to a busy receiver, to a remote peer or to another agent keep the wording
+above.
+
 **Typing guard.** Before waking an idle Codex session agentsocks checks whether any Codex terminal
 read input in the last 38 seconds (Linux only: on macOS it never holds, and `agentsocks doctor` says so. A terminal's
 access time moves in steps of about 8 seconds). It holds and re-checks every 5 seconds; after 10 minutes it
-delivers only into an 18-second quiet gap. A failed wake backs off from 30 seconds to 10 minutes and
+delivers only into an 18-second quiet gap. A failed wake backs off from 30 seconds to 10 minutes,
+keeps its reason on the thread until the next accepted wake, and
 does not use up the hourly limit of six; urgent messages and answers are exempt from that limit but have
 their own of 20 an hour per thread, so two sessions answering each other cannot wake one forever.
 
@@ -506,6 +528,14 @@ serves one socket per Codex thread in the same format Claude Code uses, which is
 inbox is advertised there under a hex name, so Claude also sends its held, denied and dropped receipts
 back; the old `t/<thread>.sock` path stays bound as an alias. agentsocks never creates that directory
 and never touches another file in it.
+
+The broker does not depend on the directory it was started from. It is started in your home directory,
+moves there when it starts, and runs its child processes there (`codex queue`, `ps`, `lsof`,
+`tailscale`, and the holders for Claude Code's session list). Removing a project folder or a git
+worktree that a session ran in never breaks waking. `agentsocks doctor` reports the broker's working
+directory (from `/proc` on Linux, `lsof` elsewhere) and fails the check when that directory no
+longer exists, as it can for a broker started by an earlier release; `agentsocks install` replaces
+such a broker.
 
 Upgrading: update the package (`npm update -g agentsocks`), then run `agentsocks install`: it stops
 a running older broker (after checking that the process really is an agentsocks daemon, including a

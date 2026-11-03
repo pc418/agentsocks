@@ -4,7 +4,7 @@ import { closeSync, constants, fstatSync, linkSync, lstatSync, mkdirSync, openSy
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { audit } from "./audit.ts";
 import { cleanText } from "./limits.ts";
-import { claudeSessionsDir, configPath, killSwitchOn, stateDir } from "./paths.ts";
+import { claudeSessionsDir, configPath, killSwitchOn, stableCwd, stateDir } from "./paths.ts";
 import { processStart, systemProc, validKillTarget } from "./procinfo.ts";
 
 export const ENTRYPOINT = "agentsocks-codex";
@@ -129,6 +129,7 @@ export function safePath(path: string | undefined): string {
 function holder(watchPid: number): number | undefined {
   try {
     const child = spawn("/bin/sh", ["-c", HOLDER_SCRIPT, "agentsocks-claudelist", String(watchPid)], {
+      cwd: stableCwd(),
       stdio: "ignore",
       env: { PATH: safePath(process.env.PATH) },
     });

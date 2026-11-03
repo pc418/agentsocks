@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { stableCwd } from "../paths.ts";
 
 export const SERVE_HTTPS_PORT = 443;
 export const FUNNEL_HTTPS_PORT = 8443;
@@ -21,7 +22,7 @@ export function runCommand(argv: readonly string[], env: NodeJS.ProcessEnv = pro
   const [program = "", ...rest] = argv;
   const bin = program === "tailscale" ? env.AGENTSOCKS_TAILSCALE_BIN || program : program;
   return new Promise((resolve) => {
-    const child = spawn(bin, rest, { stdio: "inherit" });
+    const child = spawn(bin, rest, { cwd: stableCwd(), stdio: "inherit" });
     const timer = setTimeout(() => {
       try {
         child.kill("SIGKILL");

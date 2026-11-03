@@ -9,11 +9,14 @@ import { dbPath } from "../src/paths.ts";
 import { messageStatus, peerStatus } from "../src/ops.ts";
 import { formatMessageStatus, formatPeerStatus } from "../src/render.ts";
 import { sendMessage } from "../src/send.ts";
+import { deliveryNote } from "../src/routing.ts";
+import { NOT_FROM_DRIVER_RULE } from "../src/router.ts";
 import type { Me } from "../src/peers.ts";
 
 const calls = join(root, "codex-calls.log");
 const down = join(root, "codex-down");
 const slow = join(root, "codex-slow");
+const leaky = join(root, "codex-leaky-stderr");
 const stub = join(root, "codex-like.sh");
 writeFileSync(
   stub,
@@ -21,6 +24,7 @@ writeFileSync(
     "#!/bin/sh",
     `/bin/pwd -P >/dev/null 2>&1 || { echo "Error: failed to resolve config cwd: No such file or directory (os error 2)" >&2; exit 1; }`,
     `echo "$@" >> ${calls}`,
+    `[ -e ${leaky} ] && { cat ${leaky} >&2; exit 1; }`,
     `[ -e ${down} ] && { echo "app-server unreachable" >&2; exit 1; }`,
     `[ -e ${slow} ] && sleep 3`,
     "exit 0",
@@ -52,8 +56,9 @@ after(async () => {
 test("an idle Codex thread is woken even after the directory the broker started in was deleted", async () => {
   await idleThread("wr-control");
   const control = await sendMessage(me, "codex-wr-control", "control message");
-  await until(() => queueCalls("wr-control") === 1, 5000);
+  await until(() => auditFor("wake", "wr-control").length + auditFor("wake_failed", "wr-control").length > 0, 5000);
   assert.equal(auditFor("wake", "wr-control").length, 1, "control: with a live working directory the wake goes out");
+  assert.equal(queueCalls("wr-control"), 1);
   assert.doesNotMatch(control.note, /NOT woken/);
 
   const started = process.cwd();
@@ -161,4 +166,36 @@ test("a busy receiver and a digest keep their old wording and wake nobody", asyn
   assert.equal(fyi.route, "digest");
   assert.match(fyi.note, /^Batched/);
   assert.equal(queueCalls("wr-busy") + queueCalls("wr-digest"), 0);
+});
+
+test("a credential in the wake error is redacted before the reason is shortened, so it never reaches the sender or status", async () => {
+  const head = "Error: could not reach https://deploy:";
+  const password = "q".repeat(200 - head.length);
+  writeFileSync(leaky, `${head}${password}@registry.invalid/queue failed\n`);
+  try {
+    await idleThread("wr-leak");
+    const sent = await sendMessage(me, "codex-wr-leak", "wake with a leaky error");
+    assert.match(sent.note, /^Queued, NOT woken: /);
+    assert.doesNotMatch(sent.note, new RegExp(password));
+    assert.doesNotMatch(broker.store.getThread("wr-leak")!.wake_error ?? "", new RegExp(password));
+    assert.doesNotMatch(formatPeerStatus(await peerStatus(me, "codex-wr-leak")), new RegExp(password));
+    assert.doesNotMatch(formatMessageStatus(await messageStatus(me, sent.msgId)), new RegExp(password));
+    assert.deepEqual(auditFor("wake_failed", "wr-leak").filter((l) => l.includes(password)), [], "nor the audit log");
+  } finally {
+    rmSync(leaky, { force: true });
+  }
+});
+
+test("an information-only message to a driven receiver still tells the sender what the wake did", () => {
+  const decision = { route: "pause" as const, by: "rule" as const, rule: NOT_FROM_DRIVER_RULE, driverName: "lead", awaited: true as const, reason: "not from its driver" };
+  const to = { name: "worker", kind: "codex" as const };
+  const failed = deliveryNote({ decision, status: "sent", to, wake: { outcome: "failed", reason: "app-server unreachable" } }, "normal");
+  assert.match(failed, /Delivered as information: worker works for lead/);
+  assert.match(failed, /NOT woken: the wake failed \(app-server unreachable\)/);
+  const pending = deliveryNote({ decision, status: "sent", to, wake: { outcome: "pending" } }, "normal");
+  assert.match(pending, /Delivered as information/);
+  assert.match(pending, /not confirmed/);
+  const accepted = deliveryNote({ decision, status: "sent", to, wake: { outcome: "accepted" } }, "normal");
+  assert.match(accepted, /accepted the request to wake them/);
+  assert.equal(deliveryNote({ decision, status: "sent", to }, "normal"), "Delivered as information: worker works for lead and may not act on it. Ask lead if you need it to do something.", "without a wake report the note is unchanged");
 });

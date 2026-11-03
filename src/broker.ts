@@ -1,13 +1,12 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Server, Socket } from "node:net";
 import { Store, type NewMessage, type OutboxRow, type OutboxStatus, type ThreadRow } from "./store.ts";
 import { SendError, closeServer, listenUnix, postLines, readLines, serveInbox, vetTarget, type ListenOptions } from "./ccsocks.ts";
-import { brokerSocketPath, canonicalPath, ccSocksDir, codexHexName, dbPath, ensurePrivateDir, inboxKind, killSwitchOn, namespacedSocketPath, runtimeDir, stateDir, threadSocketName, threadSocketPath } from "./paths.ts";
+import { brokerSocketPath, canonicalPath, ccSocksDir, stableCwd, codexHexName, dbPath, ensurePrivateDir, inboxKind, killSwitchOn, namespacedSocketPath, runtimeDir, stateDir, threadSocketName, threadSocketPath } from "./paths.ts";
 import { decodeAddress, encodeAddress, messageContent, parseEnvelope, userFrame } from "./envelope.ts";
 import {
   InboundLimiter,
@@ -1639,8 +1638,8 @@ export class Broker {
     const timer = setTimeout(() => {
       this.wakeTimers.delete(threadId);
       this.wake(threadId).then(settle, (err: Error) => {
-        log(`wake ${threadId} failed: ${err.message}`);
-        settle({ outcome: "failed", reason: squash(err.message, 200) });
+        log(`wake ${threadId} failed: ${redactSecrets(err.message)}`);
+        settle({ outcome: "failed", reason: squash(redactSecrets(err.message), 200) });
       });
     }, WAKE_DEBOUNCE_MS);
     timer.unref();
@@ -1652,7 +1651,7 @@ export class Broker {
   private queueCodex(t: ThreadRow, line: string): Promise<{ code: number; stderr: string }> {
     const args = ["queue", "--thread", t.thread_id, "--message", line];
     if (t.remote) args.push("--remote", t.remote);
-    return runQuiet(this.codexBin, args, CODEX_QUEUE_TIMEOUT_MS, homedir());
+    return runQuiet(this.codexBin, args, CODEX_QUEUE_TIMEOUT_MS, stableCwd());
   }
 
   private async wakeThrough(agent: AgentSpec, t: ThreadRow, line: string): Promise<{ code: number; stderr: string }> {
@@ -1710,10 +1709,10 @@ export class Broker {
       return { outcome: "accepted" };
     }
     const failures = (this.wakeFailures.get(threadId)?.failures ?? 0) + 1;
-    const reason = redactSecrets(squash(stderr, 200)) || (code === -1 ? "the wake command did not finish or could not start" : `the wake command exited with code ${code}`);
+    const reason = squash(redactSecrets(stderr), 200) || (code === -1 ? "the wake command did not finish or could not start" : `the wake command exited with code ${code}`);
     this.wakeFailures.set(threadId, { failures, nextAt: now + backoffMs(failures) });
     this.store.updateThread(threadId, { pending_wake_at: null, wake_error: reason, wake_failed_at: now, wake_failures: (t.wake_failures ?? 0) + 1 });
-    audit("wake_failed", { thread: threadId, code, attempt: failures, stderr: stderr.slice(0, 300) });
+    audit("wake_failed", { thread: threadId, code, attempt: failures, stderr: redactSecrets(stderr).slice(0, 300) });
     return { outcome: "failed", reason };
   }
 }
@@ -1736,6 +1735,9 @@ function runQuiet(cmd: string, args: string[], timeoutMs: number, cwd: string): 
 }
 
 export async function runDaemon(): Promise<void> {
+  const cwd = stableCwd();
+  process.chdir(cwd);
+  process.env.PWD = cwd;
   const broker = new Broker();
   for (let attempt = 0; ; attempt++) {
     try {

@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { stableCwd } from "../paths.ts";
 import { existsSync } from "node:fs";
 import { request } from "node:http";
 import { isIP } from "node:net";
@@ -91,7 +92,7 @@ function localApi(socketPath: string, path: string, timeoutMs: number): Promise<
 
 function cli(bin: string, args: string[], timeoutMs: number): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    execFile(bin, args, { timeout: timeoutMs, maxBuffer: 1_000_000, windowsHide: true }, (err, stdout) => {
+    execFile(bin, args, { cwd: stableCwd(), timeout: timeoutMs, maxBuffer: 1_000_000, windowsHide: true }, (err, stdout) => {
       if (err) return reject(err);
       try {
         resolve(JSON.parse(stdout));

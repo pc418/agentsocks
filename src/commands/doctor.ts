@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { brokerSocketPath, claudeSessionsDir, killSwitchOn, runtimeDir } from "../paths.ts";
 import { VERSION } from "../version.ts";
 import { brokerCall } from "../client.ts";
+import { brokerCwdCheck, processCwd } from "../procinfo.ts";
 import { findOwnClaudeSession } from "../claude.ts";
 import { agentReports, hookTrustStatus, runningBuildLine } from "../install.ts";
 import { statusLine as listAgentsStatus } from "../claudelist.ts";
@@ -33,6 +34,8 @@ export const doctor: Handler = async () => {
         ? `pid ${p.pid}, v${p.version}, ${p.threads} codex inboxes, ${brokerSocketPath()}${buildLine === undefined ? "" : `; ${buildLine}`}`
         : `pid ${p.pid}, v${p.version}, ${p.threads} codex inboxes, ${brokerSocketPath()}; this is v${VERSION}, so run \`agentsocks install\` (or kill ${p.pid}) and the next command starts the new one`;
     healthy = check(p.version === VERSION && buildLine === undefined, "broker", detail) && healthy;
+    const cwd = brokerCwdCheck(p.pid, processCwd(p.pid), existsSync, process.platform);
+    healthy = check(cwd.ok, "broker working directory", cwd.detail) && healthy;
   } catch (err) {
     healthy = check(false, "broker", (err as Error).message) && healthy;
   }

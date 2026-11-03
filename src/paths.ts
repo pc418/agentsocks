@@ -1,9 +1,16 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, chmodSync, lstatSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, chmodSync, lstatSync, realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
 const uid = (): number => process.getuid?.() ?? 0;
+
+export function stableCwd(home: string = homedir()): string {
+  try {
+    if (home && statSync(home).isDirectory()) return home;
+  } catch {}
+  return "/";
+}
 
 export interface SocketContext {
   platform: NodeJS.Platform;

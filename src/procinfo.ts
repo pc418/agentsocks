@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { stableCwd } from "./paths.ts";
 
 export interface ProcSource {
   read(path: string): string | undefined;
@@ -18,7 +19,7 @@ export const systemProc: ProcSource = {
   },
   ps(args) {
     try {
-      return execFileSync("ps", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      return execFileSync("ps", args, { cwd: stableCwd(), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
     } catch {
       return undefined;
     }
@@ -64,6 +65,49 @@ export function processArgs(pid: number, platform: NodeJS.Platform = process.pla
   }
   const line = src.ps(["-ww", "-o", "args=", "-p", String(pid)])?.trim();
   return line ? line.split(/\s+/) : undefined;
+}
+
+export interface CwdSource {
+  readlink(path: string): string | undefined;
+  lsof(args: string[]): string | undefined;
+}
+
+export const systemCwd: CwdSource = {
+  readlink(path) {
+    try {
+      return readlinkSync(path);
+    } catch {
+      return undefined;
+    }
+  },
+  lsof(args) {
+    try {
+      return execFileSync("lsof", args, { cwd: stableCwd(), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 });
+    } catch (err) {
+      return (err as { stdout?: string }).stdout || undefined;
+    }
+  },
+};
+
+const DELETED = " (deleted)";
+
+export function processCwd(pid: number, platform: NodeJS.Platform = process.platform, src: CwdSource = systemCwd): { path: string; deleted: boolean } | undefined {
+  if (hasProcfs(platform)) {
+    const link = src.readlink(`/proc/${pid}/cwd`);
+    if (link === undefined) return undefined;
+    return link.endsWith(DELETED) ? { path: link.slice(0, -DELETED.length), deleted: true } : { path: link, deleted: false };
+  }
+  const name = src
+    .lsof(["-a", "-p", String(pid), "-d", "cwd", "-Fn"])
+    ?.split("\n")
+    .find((line) => line.startsWith("n"));
+  return name && name.length > 1 ? { path: name.slice(1), deleted: false } : undefined;
+}
+
+export function brokerCwdCheck(pid: number, cwd: { path: string; deleted: boolean } | undefined, exists: (path: string) => boolean, platform: NodeJS.Platform): { ok: boolean; detail: string } {
+  if (!cwd) return { ok: true, detail: `could not be read (${hasProcfs(platform) ? `/proc/${pid}/cwd` : "lsof"} gave nothing)` };
+  if (cwd.deleted || !exists(cwd.path)) return { ok: false, detail: `${cwd.path} no longer exists, so its child processes fail; run \`agentsocks install\` (or kill ${pid}) and the next command starts a broker that works from the home directory` };
+  return { ok: true, detail: cwd.path };
 }
 
 export function validKillTarget(pid: unknown): pid is number {
