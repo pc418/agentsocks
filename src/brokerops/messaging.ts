@@ -2,7 +2,7 @@ import { needThread } from "./request.ts";
 import type { OpTable } from "./types.ts";
 
 export const messagingOps: OpTable = {
-  route_send: async (broker, req) => ({ result: await broker.routeSend(req) }),
+  route_send: async (broker, req) => ({ result: await broker.routeSendReported(req, Date.now()) }),
   take: async (broker, req) => broker.read(needThread(req), req.via === "shell" ? "shell" : "tool"),
   wait: async (broker, req, conn) => {
     const id = needThread(req);

@@ -38,12 +38,18 @@ export interface RouteRequest {
   via?: "channel";
 }
 
+export interface WakeReport {
+  outcome: "accepted" | "failed" | "skipped" | "not-needed" | "pending";
+  reason?: string;
+}
+
 export interface RouteSendResult {
   msgId: string;
   status: OutboxStatus;
   decision: Decision;
   to: { name: string; kind: "claude" | "codex" };
   error?: string;
+  wake?: WakeReport;
 }
 
 const SESSION = /^[A-Za-z0-9_-]{1,80}$/;
@@ -108,12 +114,31 @@ export const driverInfoNote = (worker: string, driver: string | null): string =>
     ? `Delivered as information: ${worker} works for its driver and may not act on it.`
     : `Delivered as information: ${worker} works for ${driver} and may not act on it. Ask ${driver} if you need it to do something.`;
 
-export function deliveryNote(result: Pick<RouteSendResult, "decision" | "status" | "to">, urgency: Urgency, visible?: readonly string[]): string {
+const LATER = "They see it at their next tool call or the next time a turn starts.";
+
+function wakeNote(wake: WakeReport): string {
+  const reason = wake.reason ?? "no reason recorded";
+  switch (wake.outcome) {
+    case "accepted":
+      return "Delivered, and Codex accepted the request to wake them, so they start a turn and read it shortly.";
+    case "failed":
+      return `Queued, NOT woken: the wake failed (${reason}). ${LATER} The wake is retried with backoff.`;
+    case "skipped":
+      return `Queued, NOT woken: ${reason}. ${LATER}`;
+    case "not-needed":
+      return `Delivered; ${reason}.`;
+    case "pending":
+      return "Queued; the request to wake them has not answered yet, so the wake is not confirmed. Check message_status with this message id.";
+  }
+}
+
+export function deliveryNote(result: Pick<RouteSendResult, "decision" | "status" | "to" | "wake">, urgency: Urgency, visible?: readonly string[]): string {
   const { decision } = result;
   if (decision.rule === NOT_FROM_DRIVER_RULE && decision.driverName)
     return driverInfoNote(result.to.name, visible !== undefined && !visible.includes(decision.driverName) ? null : decision.driverName);
   const escalate = urgency === "urgent" ? "" : " Send with urgency urgent if it cannot wait.";
   const replaces = decision.escalates ? " It repeats the same text that was still waiting." : "";
+  if (result.wake && (decision.route === "now" || decision.route === "pause")) return `${wakeNote(result.wake)}${replaces}`;
   switch (decision.route) {
     case "now":
       return `Delivered. They see it at their next tool call, or right away if idle.${replaces}`;

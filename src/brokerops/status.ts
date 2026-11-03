@@ -17,7 +17,7 @@ export const statusOps: OpTable = {
     const row = typeof req.msgId === "string" ? broker.store.getOutbox(req.msgId) : undefined;
     const mine = row && (broker.holds(caller, row.from_addr, row.from_session) || broker.holds(caller, row.to_addr, row.to_session) || broker.isCliSender(caller, row));
     if (!row || !mine) throw new Error(`no message ${String(req.msgId)} sent or received by you in the outbox (only messages sent through agentsocks are tracked)`);
-    return { result: messageStatus(row) };
+    return { result: messageStatus(row, broker.store) };
   },
   stats: async (broker, req) => {
     const days = typeof req.days === "number" && req.days > 0 ? Math.min(req.days, 14) : 14;

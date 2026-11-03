@@ -24,6 +24,13 @@ export interface Drift {
   detail: string;
 }
 
+export interface WakeState {
+  lastAccepted: number | null;
+  failedAt: number | null;
+  error: string | null;
+  failures: number;
+}
+
 export interface PeerStatus {
   peer: { name: string; kind: "claude" | "codex" | "remote"; agent?: string; addr: string; driver?: string };
   desired: {
@@ -38,8 +45,14 @@ export interface PeerStatus {
     lastActivity: number | null;
     lastShown: number | null;
     lastReply: number | null;
+    wake?: WakeState;
   };
   drift: Drift[];
+}
+
+export function wakeState(t: ThreadRow): WakeState {
+  const accepted = [...(JSON.parse(t.wake_log) as number[]), ...(JSON.parse(t.exempt_wake_log) as number[])];
+  return { lastAccepted: accepted.length ? Math.max(...accepted) : null, failedAt: t.wake_failed_at ?? null, error: t.wake_error ?? null, failures: t.wake_failures ?? 0 };
 }
 
 const minutes = (ms: number): string => `${Math.max(1, Math.round(ms / 60_000))} min`;
@@ -122,21 +135,30 @@ export function peerStatus(store: Store, ref: PeerRef, now: number, visible?: re
       unreadMessages: unread,
       heldDigests: held,
     },
-    actual: { state, currentTask, lastTool, lastActivity, lastShown: sent.shown, lastReply: sent.replied },
+    actual: { state, currentTask, lastTool, lastActivity, lastShown: sent.shown, lastReply: sent.replied, ...(ref.kind === "codex" && ref.thread && { wake: wakeState(ref.thread) }) },
     drift,
   };
 }
 
-export type MessageRecord = Omit<OutboxRow, "body" | "decision"> & { bodyChars: number; decision: unknown; to_agent?: InboxAgentId };
+export interface MessageWake {
+  accepted: number;
+  unread: boolean;
+  receiver: WakeState;
+}
 
-export function messageStatus(row: OutboxRow): MessageRecord {
+export type MessageRecord = Omit<OutboxRow, "body" | "decision"> & { bodyChars: number; decision: unknown; to_agent?: InboxAgentId; wake?: MessageWake };
+
+export function messageStatus(row: OutboxRow, store?: Store): MessageRecord {
   const { body, decision, ...rest } = row;
   let parsed: unknown = null;
   try {
     parsed = JSON.parse(decision);
   } catch {}
   const { agent } = agentFieldOf(row.to_thread);
-  return { ...rest, bodyChars: row.body_chars ?? body.length, decision: parsed, ...(agent && { to_agent: agent }) };
+  const message = store && row.to_thread ? store.messageByMsgId(row.to_thread, row.msg_id) : undefined;
+  const thread = message && row.to_thread ? store?.getThread(row.to_thread) : undefined;
+  const wake = message && thread ? { accepted: message.wakes, unread: message.state === "queued" || message.state === "notified", receiver: wakeState(thread) } : undefined;
+  return { ...rest, bodyChars: row.body_chars ?? body.length, decision: parsed, ...(agent && { to_agent: agent }), ...(wake && { wake }) };
 }
 
 export interface StatRow {

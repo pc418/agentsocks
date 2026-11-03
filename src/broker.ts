@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Server, Socket } from "node:net";
@@ -31,7 +32,7 @@ import { classify, decideByRules, isDriver, makeDriverScope, resolve, senderIdOf
 import { scanCodexTtys, typingGuard, type TtyActivity } from "./typing.ts";
 import { TranscriptWatcher } from "./transcript.ts";
 import { watchClassifier, type Classifier } from "./classifier.ts";
-import { parseRouteRequest, senderLabel as partyLabel, type Party, type Reach, type RouteRequest, type RouteSendResult, type Target } from "./routing.ts";
+import { parseRouteRequest, senderLabel as partyLabel, type Party, type Reach, type RouteRequest, type RouteSendResult, type Target, type WakeReport } from "./routing.ts";
 import { TaskService } from "./tasks.ts";
 import { AskService } from "./asks.ts";
 import { BodyCache, LabelService } from "./labels.ts";
@@ -58,6 +59,8 @@ import type { Conn, Reply, OpRequest } from "./brokerops/types.ts";
 export { VERSION } from "./version.ts";
 import { VERSION } from "./version.ts";
 const WAKE_DEBOUNCE_MS = 1500;
+const WAKE_REPORT_MS = 10_000;
+const CODEX_QUEUE_TIMEOUT_MS = 20_000;
 const MAX_WAIT_MS = 280_000;
 const READ_BUDGET = 32_000;
 const MAX_DECISION_QUEUE = 20;
@@ -101,6 +104,11 @@ interface ReceiverRef {
   sessionId: string | null;
   path: string;
   cwd?: string;
+}
+
+interface Routed {
+  result: RouteSendResult;
+  wake?: Promise<WakeReport>;
 }
 
 export function modeFromCodex(permissionMode: string | undefined | null): "bypass" | "prompting" | null {
@@ -217,6 +225,8 @@ function ago(ms: number): string {
   return minutes < 1 ? "just now" : minutes < 60 ? `${minutes} min ago` : `${Math.round(minutes / 60)} h ago`;
 }
 
+const within = (ms: number): string => (ms < 90_000 ? `${Math.max(1, Math.ceil(ms / 1000))} s` : `${Math.ceil(ms / 60_000)} min`);
+
 const MODE_CLAIM: Record<string, number> = { bypass: 2, prompting: 1 };
 
 export function weakestMode(modes: (string | null)[]): "bypass" | "prompting" | null {
@@ -256,14 +266,14 @@ export class Broker {
   private nsInboxes = new Map<string, { server: Server; path: string }>();
   private socketNames = new Map<string, string>();
   private waiters = new Map<string, Set<() => void>>();
-  private wakeTimers = new Map<string, NodeJS.Timeout>();
+  private wakeTimers = new Map<string, { timer: NodeJS.Timeout; outcome: Promise<WakeReport> }>();
   private purgeTimer?: NodeJS.Timeout;
   private sweepTimer?: NodeJS.Timeout;
   private limiter = new InboundLimiter();
   private askLimiter = new InboundLimiter();
   private chains = new Map<string, Promise<unknown>>();
   private queued = new Map<string, number>();
-  private inflight = new Map<string, Promise<RouteSendResult>>();
+  private inflight = new Map<string, Promise<Routed>>();
   private classifying = 0;
   private flushRetry = new Map<string, { failures: number; nextAt: number }>();
   private nsFailures = new Map<string, { failures: number; nextAt: number }>();
@@ -272,6 +282,7 @@ export class Broker {
   private readonly platform: NodeJS.Platform;
   private readonly codexBin: string;
   private readonly wakeEnabled: boolean;
+  private readonly wakeReportMs: number;
   private readonly sweepMs: number;
   private readonly classifier: () => Classifier | undefined;
   private readonly ttyScan: (now: number) => TtyActivity[];
@@ -294,6 +305,7 @@ export class Broker {
     opts: {
       codexBin?: string;
       wakeEnabled?: boolean;
+      wakeReportMs?: number;
       sweepMs?: number;
       sessionCacheMs?: number;
       classifier?: () => Classifier | undefined;
@@ -310,6 +322,7 @@ export class Broker {
     this.codexBin = opts.codexBin ?? process.env.AGENTSOCKS_CODEX_BIN ?? "codex";
     this.buildHash = buildHash(codeDir());
     this.wakeEnabled = opts.wakeEnabled ?? process.env.AGENTSOCKS_WAKE !== "0";
+    this.wakeReportMs = opts.wakeReportMs ?? WAKE_REPORT_MS;
     this.sweepMs = opts.sweepMs ?? (Number(process.env.AGENTSOCKS_SWEEP_MS) || 5000);
     this.classifier = opts.classifier ?? watchClassifier((m) => log(m));
     this.ttyScan = opts.ttyScan ?? ((now) => scanCodexTtys(now));
@@ -381,7 +394,7 @@ export class Broker {
   async stop(): Promise<void> {
     if (this.purgeTimer) clearInterval(this.purgeTimer);
     if (this.sweepTimer) clearInterval(this.sweepTimer);
-    for (const timer of this.wakeTimers.values()) clearTimeout(timer);
+    for (const { timer } of this.wakeTimers.values()) clearTimeout(timer);
     await stopGateway(this);
     for (const srv of this.inboxes.values()) await closeServer(srv);
     for (const ns of this.nsInboxes.values()) await closeServer(ns.server);
@@ -912,7 +925,7 @@ export class Broker {
     return this.claudeRecord(canonicalPath(raw))?.sessionId ?? null;
   }
 
-  private enqueueForCodex(threadId: string, m: Inbound, decision: Decision, now: number): { status: "sent" | "held" | "refused"; error?: string } {
+  private enqueueForCodex(threadId: string, m: Inbound, decision: Decision, now: number): { status: "sent" | "held" | "refused"; error?: string; wake?: Promise<WakeReport> } {
     const digest = decision.route === "digest";
     const message: NewMessage = {
       id: randomUUID(),
@@ -937,13 +950,12 @@ export class Broker {
       return { status: "refused", error: "duplicate" };
     }
     audit("receive", { thread: threadId, from: sender, name: m.fromName, msg: m.msgId, evicted, route: decision.route }, m.body);
-    if (!digest) {
-      this.notify(threadId);
-      this.scheduleWake(threadId);
-    } else if (this.listening(threadId)) {
-      this.releaseDigests(threadId, now);
+    if (digest) {
+      if (this.listening(threadId)) this.releaseDigests(threadId, now);
+      return { status: "held" };
     }
-    return { status: digest ? "held" : "sent" };
+    this.notify(threadId);
+    return { status: "sent", wake: this.scheduleWake(threadId) };
   }
 
   private onReceipt(threadId: string, f: Record<string, unknown>): void {
@@ -1334,6 +1346,24 @@ export class Broker {
   }
 
   async routeSend(raw: Record<string, unknown>): Promise<RouteSendResult> {
+    return (await this.route(raw)).result;
+  }
+
+  async routeSendReported(raw: Record<string, unknown>, startedAt: number = Date.now()): Promise<RouteSendResult> {
+    const { result, wake } = await this.route(raw);
+    if (!wake) return result;
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<WakeReport>((done) => {
+      timer = setTimeout(() => done({ outcome: "pending" }), Math.max(0, startedAt + this.wakeReportMs - Date.now()));
+    });
+    try {
+      return { ...result, wake: await Promise.race([wake, late]) };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async route(raw: Record<string, unknown>): Promise<Routed> {
     if (killSwitchOn()) throw new SendError("off", "agentsocks is switched off on this machine (kill switch)");
     const req = parseRouteRequest(raw);
     assertMayRoute(this, req);
@@ -1343,7 +1373,7 @@ export class Broker {
     const running = this.inflight.get(flightKey);
     if (running) return running;
     const known = this.recorded(req.msgId, who.addr, toAddr);
-    if (known) return known;
+    if (known) return { result: known };
     if (this.limiter.check(who.key, toAddr) !== "ok") throw new SendError("rate-limited", "too many messages to this session just now; try again shortly");
     const ref = this.resolveReceiver(req.to);
     const run = this.routeNew(req, ref, who);
@@ -1355,7 +1385,7 @@ export class Broker {
     }
   }
 
-  private async routeNew(req: RouteRequest, ref: ReceiverRef, who: Who): Promise<RouteSendResult> {
+  private async routeNew(req: RouteRequest, ref: ReceiverRef, who: Who): Promise<Routed> {
     const outcome = await this.classifyAhead(ref, who, req.body, req.urgency, req.taskId, req.from.session);
     return this.serialized(ref.addr, () => this.routeLocked(req, ref, who, outcome), MAX_DECISION_QUEUE);
   }
@@ -1364,7 +1394,7 @@ export class Broker {
     return { ...from, addr: this.advertisedAddr(from.addr) };
   }
 
-  private async routeLocked(req: RouteRequest, ref: ReceiverRef, who: Who, outcome: ClassifierOutcome | undefined): Promise<RouteSendResult> {
+  private async routeLocked(req: RouteRequest, ref: ReceiverRef, who: Who, outcome: ClassifierOutcome | undefined): Promise<Routed> {
     const now = Date.now();
     const sender = who.addr;
     this.refreshDriverBinding(ref.threadId, who.addr, req.from.session ?? null, req.from.kind);
@@ -1422,10 +1452,12 @@ export class Broker {
       { from: req.from.name, from_kind: req.from.kind, to: ref.name, to_kind: ref.kind, msg: req.msgId, route: decision.route, by: decision.by, ...(decision.rule && { rule: decision.rule }) },
       req.body,
     );
-    return { msgId: req.msgId, status: verdict.status, decision, to: { name: ref.name, kind: ref.kind }, ...(verdict.error && { error: verdict.error }) };
+    const result: RouteSendResult = { msgId: req.msgId, status: verdict.status, decision, to: { name: ref.name, kind: ref.kind }, ...(verdict.error && { error: verdict.error }) };
+    const reported = verdict.wake && verdict.status === "sent" && views.receiver.state !== "busy" && this.store.getThread(ref.threadId!)?.agent === "codex" && !isRemoteThread(this, ref.threadId!);
+    return reported ? { result, wake: verdict.wake } : { result };
   }
 
-  private async deliver(ref: ReceiverRef, req: RouteRequest, decision: Decision, now: number): Promise<{ status: OutboxStatus; error?: string }> {
+  private async deliver(ref: ReceiverRef, req: RouteRequest, decision: Decision, now: number): Promise<{ status: OutboxStatus; error?: string; wake?: Promise<WakeReport> }> {
     if (decision.route === "merge") return { status: "merged" };
     const from = this.sentAs(req.from);
     if (ref.kind === "codex") {
@@ -1597,20 +1629,30 @@ export class Broker {
     }
   }
 
-  private scheduleWake(threadId: string): void {
-    if (!this.wakeEnabled || killSwitchOn() || this.wakeTimers.has(threadId)) return;
+  private scheduleWake(threadId: string): Promise<WakeReport> {
+    if (!this.wakeEnabled) return Promise.resolve({ outcome: "skipped", reason: "waking is turned off for this broker (AGENTSOCKS_WAKE=0)" });
+    if (killSwitchOn()) return Promise.resolve({ outcome: "skipped", reason: "agentsocks is switched off on this machine" });
+    const scheduled = this.wakeTimers.get(threadId);
+    if (scheduled) return scheduled.outcome;
+    let settle!: (report: WakeReport) => void;
+    const outcome = new Promise<WakeReport>((done) => (settle = done));
     const timer = setTimeout(() => {
       this.wakeTimers.delete(threadId);
-      this.wake(threadId).catch((err) => log(`wake ${threadId} failed: ${err.message}`));
+      this.wake(threadId).then(settle, (err: Error) => {
+        log(`wake ${threadId} failed: ${err.message}`);
+        settle({ outcome: "failed", reason: squash(err.message, 200) });
+      });
     }, WAKE_DEBOUNCE_MS);
     timer.unref();
-    this.wakeTimers.set(threadId, timer);
+    this.wakeTimers.set(threadId, { timer, outcome });
+    return outcome;
   }
 
+  // codex resolves its config from the working directory; the broker's own may be a directory that was deleted since
   private queueCodex(t: ThreadRow, line: string): Promise<{ code: number; stderr: string }> {
     const args = ["queue", "--thread", t.thread_id, "--message", line];
     if (t.remote) args.push("--remote", t.remote);
-    return runQuiet(this.codexBin, args, 20_000);
+    return runQuiet(this.codexBin, args, CODEX_QUEUE_TIMEOUT_MS, homedir());
   }
 
   private async wakeThrough(agent: AgentSpec, t: ThreadRow, line: string): Promise<{ code: number; stderr: string }> {
@@ -1622,28 +1664,32 @@ export class Broker {
     }
   }
 
-  async wake(threadId: string, now: number = Date.now()): Promise<void> {
-    if (killSwitchOn() || isRemoteThread(this, threadId)) return;
+  async wake(threadId: string, now: number = Date.now()): Promise<WakeReport> {
+    if (killSwitchOn()) return { outcome: "skipped", reason: "agentsocks is switched off on this machine" };
+    if (isRemoteThread(this, threadId)) return { outcome: "skipped", reason: "it is a remote session, which this machine cannot wake" };
     const t = this.store.getThread(threadId);
-    if (!t || t.state === "ended") return;
+    if (!t) return { outcome: "skipped", reason: "the session is not registered" };
+    if (t.state === "ended") return { outcome: "skipped", reason: "the session has ended" };
     const other = t.agent === "codex" ? undefined : agentSpec(t.agent, this.agents);
-    if (t.agent !== "codex" && !(other?.wake && (other.canWake?.() ?? true))) return;
-    if (t.state === "busy" && now - t.last_seen < BUSY_STALE_MS) return;
-    if (t.pending_wake_at && now - t.pending_wake_at < WAKE_PENDING_MS) return;
-    if (now < (this.wakeFailures.get(threadId)?.nextAt ?? 0)) return;
+    if (t.agent !== "codex" && !(other?.wake && (other.canWake?.() ?? true))) return { outcome: "skipped", reason: "this kind of session cannot be woken" };
+    if (t.state === "busy" && now - t.last_seen < BUSY_STALE_MS) return { outcome: "not-needed", reason: "they are in a turn now, so they see it at their next tool call" };
+    if (t.pending_wake_at && now - t.pending_wake_at < WAKE_PENDING_MS) return { outcome: "skipped", reason: `a wake sent ${ago(now - t.pending_wake_at)} has not started their turn yet` };
+    const nextAt = this.wakeFailures.get(threadId)?.nextAt ?? 0;
+    if (now < nextAt) return { outcome: "skipped", reason: `the last wake attempt failed (${t.wake_error ?? "no reason recorded"}); the next retry is in ${within(nextAt - now)}` };
     const wanted = this.store.wakeable(threadId);
     if (wanted.length === 0) {
       if (t.wake_hold_since !== null) this.store.updateThread(threadId, { wake_hold_since: null });
-      return;
+      return { outcome: "not-needed", reason: "they read it before a wake was needed" };
     }
     const exempt = wanted.some((m) => m.exempt === 1);
     const logColumn = exempt ? "exempt_wake_log" : "wake_log";
     const recent = (JSON.parse(t[logColumn]) as number[]).filter((ts) => now - ts < 3_600_000);
     const capKey = `${threadId}|${logColumn}`;
-    if (recent.length >= (exempt ? MAX_EXEMPT_WAKES_PER_HOUR : MAX_WAKES_PER_HOUR)) {
+    const cap = exempt ? MAX_EXEMPT_WAKES_PER_HOUR : MAX_WAKES_PER_HOUR;
+    if (recent.length >= cap) {
       if (!this.capLogged.has(capKey)) audit("wake_skipped", { thread: threadId, reason: exempt ? "hourly cap on urgent and awaited wakes" : "hourly cap" });
       this.capLogged.add(capKey);
-      return;
+      return { outcome: "skipped", reason: `the hourly limit of ${cap} ${exempt ? "urgent and awaited " : ""}wakes for this session is used up` };
     }
     this.capLogged.delete(capKey);
     if (!other && typingGuard(this.ttyScan(now), t.wake_hold_since, now) === "hold") {
@@ -1651,7 +1697,7 @@ export class Broker {
         this.store.updateThread(threadId, { wake_hold_since: now });
         audit("wake_held", { thread: threadId, reason: "typing" });
       }
-      return;
+      return { outcome: "skipped", reason: "someone is typing in its terminal, so the wake waits until they stop" };
     }
     this.store.updateThread(threadId, { pending_wake_at: now, wake_hold_since: null });
     const line = wakeLine(wanted.length, other !== undefined || t.hooks_active === 1, this.fromLabel(threadId), other?.readTool);
@@ -1659,21 +1705,23 @@ export class Broker {
     if (code === 0) {
       this.wakeFailures.delete(threadId);
       this.store.bumpWakes(wanted.map((m) => m.id));
-      this.store.updateThread(threadId, { [logColumn]: JSON.stringify([...recent, now]) });
+      this.store.updateThread(threadId, { [logColumn]: JSON.stringify([...recent, now]), wake_error: null, wake_failed_at: null, wake_failures: 0 });
       audit("wake", { thread: threadId, count: wanted.length, remote: (!other && t.remote) || undefined });
-      return;
+      return { outcome: "accepted" };
     }
     const failures = (this.wakeFailures.get(threadId)?.failures ?? 0) + 1;
+    const reason = redactSecrets(squash(stderr, 200)) || (code === -1 ? "the wake command did not finish or could not start" : `the wake command exited with code ${code}`);
     this.wakeFailures.set(threadId, { failures, nextAt: now + backoffMs(failures) });
-    this.store.updateThread(threadId, { pending_wake_at: null });
+    this.store.updateThread(threadId, { pending_wake_at: null, wake_error: reason, wake_failed_at: now, wake_failures: (t.wake_failures ?? 0) + 1 });
     audit("wake_failed", { thread: threadId, code, attempt: failures, stderr: stderr.slice(0, 300) });
+    return { outcome: "failed", reason };
   }
 }
 
-function runQuiet(cmd: string, args: string[], timeoutMs: number): Promise<{ code: number; stderr: string }> {
+function runQuiet(cmd: string, args: string[], timeoutMs: number, cwd: string): Promise<{ code: number; stderr: string }> {
   return new Promise((resolve) => {
     let stderr = "";
-    const child = spawn(cmd, args, { stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn(cmd, args, { cwd, stdio: ["ignore", "ignore", "pipe"] });
     const timer = setTimeout(() => child.kill("SIGTERM"), timeoutMs);
     child.stderr?.on("data", (d) => (stderr += String(d)));
     child.on("error", (err) => {

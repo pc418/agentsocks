@@ -35,6 +35,9 @@ export interface ThreadRow {
   driver_sid: string | null;
   driver_instructed_at: number | null;
   name_explicit: number | null;
+  wake_error: string | null;
+  wake_failed_at: number | null;
+  wake_failures: number;
 }
 
 export interface MessageRow {
@@ -309,6 +312,10 @@ export function privateFile(path: string): void {
          FROM messages WHERE to_thread = ? AND ${UNREAD} AND kind = 'message' AND route != 'digest' AND wakes < ?`,
       )
       .all(threadId, MAX_WAKES_PER_MESSAGE) as unknown as { id: string; exempt: number }[];
+  }
+
+  messageByMsgId(threadId: string, msgId: string): MessageRow | undefined {
+    return this.db.prepare("SELECT * FROM messages WHERE to_thread = ? AND msg_id = ? AND kind = 'message'").get(threadId, msgId) as MessageRow | undefined;
   }
 
   bumpWakes(ids: string[]): void {

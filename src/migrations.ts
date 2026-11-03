@@ -259,6 +259,14 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "threads.driver_instructed_at",
     up: addColumns("threads", [["driver_instructed_at", "INTEGER"]]),
   },
+  {
+    name: "threads.wake_error, wake_failed_at, wake_failures",
+    up: addColumns("threads", [
+      ["wake_error", "TEXT"],
+      ["wake_failed_at", "INTEGER"],
+      ["wake_failures", "INTEGER NOT NULL DEFAULT 0"],
+    ]),
+  },
 ];
 
 export function migrate(db: DatabaseSync, steps: readonly Migration[] = MIGRATIONS): void {

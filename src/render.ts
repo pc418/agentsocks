@@ -1,6 +1,6 @@
 import { kindLabel } from "./agents/types.ts";
 import { renderTask } from "./tasks.ts";
-import type { DestinationStats, MessageRecord, PeerStatus } from "./status.ts";
+import type { DestinationStats, MessageRecord, PeerStatus, WakeState } from "./status.ts";
 import type { TaskRow } from "./store.ts";
 import { squash } from "./limits.ts";
 
@@ -36,6 +36,7 @@ export function formatPeerStatus(s: PeerStatus, now: number = Date.now(), visibl
   lines.push(`  asked of it: ${asked.join(", ")}`);
   for (const t of d.openTasks) lines.push(`    ${t.id} [${t.status.replace("_", " ")}] ${squash(t.title, 100)}, updated ${since(t.updatedAt, now)}`);
   lines.push(`  last shown ${since(a.lastShown, now)}, last reply ${since(a.lastReply, now)}`);
+  if (a.wake) lines.push(`  ${wakeLine(a.wake, now)}`);
   lines.push(s.drift.length ? `  drift:\n${s.drift.map((x) => `    ${x.code}: ${x.detail}`).join("\n")}` : "  drift: none");
   return lines.join("\n");
 }
@@ -48,8 +49,19 @@ export function formatMessageStatus(m: MessageRecord & { decision: unknown }, no
   lines.push(`  created ${since(m.created_at, now)}, sent ${since(m.sent_at, now)}, shown ${since(m.shown_at, now)}, replied ${since(m.replied_at, now)}`);
   if (m.carrier_id) lines.push(`  delivered inside digest message ${m.carrier_id}`);
   if (m.task_id) lines.push(`  about task ${m.task_id}`);
+  if (m.wake) {
+    const times = `${m.wake.accepted} ${m.wake.accepted === 1 ? "time" : "times"}`;
+    const own = m.wake.accepted > 0 ? `wake accepted ${times} for this message` : "no wake accepted for this message yet";
+    const receiver = m.wake.receiver.failedAt !== null && m.wake.unread ? `; the receiver's latest ${wakeLine(m.wake.receiver, now)}` : "";
+    lines.push(`  ${own}${receiver}`);
+  }
   if (m.error) lines.push(`  note: ${m.error}`);
   return lines.join("\n");
+}
+
+function wakeLine(w: WakeState, now: number): string {
+  if (w.failedAt !== null) return `wake failed ${since(w.failedAt, now)} (${w.failures} in a row): ${w.error ?? "no reason recorded"}`;
+  return w.lastAccepted !== null ? `last wake accepted ${since(w.lastAccepted, now)}` : "no wake sent yet";
 }
 
 export function formatStats(r: { days: number; destinations: DestinationStats[] }): string {
