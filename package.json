@@ -1,7 +1,7 @@
 {
   "name": "agentsocks",
   "mcpName": "io.github.Aelethion/agentsocks",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Let Claude Code and Codex sessions on one machine message each other, through Claude Code's own cross-session inbox (cc-socks) and Codex's hooks, MCP and queue.",
   "keywords": [
     "claude-code",

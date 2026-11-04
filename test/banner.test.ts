@@ -54,7 +54,7 @@ test("the banner shows only to a person at a terminal: nothing when output is pi
 test("a terminal narrower than the wordmark gets only the version line, so the art never wraps", async () => {
   const narrow = capture(true, 40);
   await showBanner({ out: narrow.out, env: { COLORTERM: "truecolor" }, agent: () => false, wait: async () => assert.fail("no sweep on a narrow terminal") });
-  assert.equal(narrow.text(), "  v0.4.0  messaging between your coding-agent sessions\n\n");
+  assert.equal(narrow.text(), "  v0.4.1  messaging between your coding-agent sessions\n\n");
 });
 
 test("at a color terminal the wordmark sweeps in from the left in ten frames, ends whole, and never hides the cursor", async () => {
@@ -68,7 +68,7 @@ test("at a color terminal the wordmark sweeps in from the left in ten frames, en
   assert.ok(!text.includes("\x1b[?25l"), "Ctrl-C during the sweep can never leave the cursor hidden");
   const lastFrame = text.slice(text.lastIndexOf("\x1b[4A"));
   for (const line of wordmark(bannerColors(env))) assert.ok(lastFrame.includes(line), `the last frame holds ${JSON.stringify(line)}`);
-  assert.match(text, /v0\.4\.0 {2}messaging between your coding-agent sessions/);
+  assert.match(text, /v0\.4\.1 {2}messaging between your coding-agent sessions/);
 });
 
 test("with NO_COLOR at a terminal the wordmark is printed once, still, without any escape code", async () => {

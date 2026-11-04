@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.1 (2026-11-03)
+
+### Fixed
+
+- **Idle Codex sessions are woken again when the folder the broker started in is gone.** The broker kept the working directory of whatever started it and ran `codex queue` there, so once that folder was removed (a finished git worktree, say) every wake failed with `failed to resolve config cwd`. The broker now starts in and moves to the home directory, and runs every child process there. `startBroker` no longer passes the caller's directory or `PWD` along, and relative path variables (`AGENTSOCKS_RUNTIME_DIR`, `AGENTSOCKS_STATE_DIR`, `AGENTSOCKS_CONFIG` and the rest) are resolved against the caller's directory first, so they mean what they meant before. The starter also works out the final runtime and state directories (with the short-path fallback) and hands them to the broker, so both always use the same socket.
+
+### Changed
+
+- A sender to an idle Codex session is told whether the wake went out: "Delivered, and Codex accepted the request to wake them, ...", "Queued, NOT woken: <reason>. ..." (the wake's error, the retry wait, the hourly limit, the typing guard, an earlier wake still pending, or waking turned off), or that the wake has not answered within 10 seconds. It is no longer told "right away if idle" when nothing woke them. `send_message` and `agentsocks send` to such a session now answer after the wake attempt, usually within 2 to 3 seconds.
+- A wake's latest failure is kept on the thread. `agentsocks status <msg-id>` / `message_status` and `agentsocks status <session>` / `peer_status` show it, along with whether a wake was accepted for the message.
+- `agentsocks doctor` reports the broker's working directory, fails when that directory no longer exists, and says it is unknown when it cannot be read.
+
+### Upgrading
+
+Rebuild or update, then run `agentsocks install` (or stop the running broker) so the new broker starts. One migration step adds `wake_error`, `wake_failed_at` and `wake_failures` to `threads`. Sessions whose agentsocks MCP server started before the update keep the old sender wording until that server restarts.
+
 ## 0.4.0 (2026-10-19)
 
 Local channels, a tailnet gateway, more agents, and workers with drivers.
