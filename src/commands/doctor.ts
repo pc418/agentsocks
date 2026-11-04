@@ -35,7 +35,8 @@ export const doctor: Handler = async () => {
         : `pid ${p.pid}, v${p.version}, ${p.threads} codex inboxes, ${brokerSocketPath()}; this is v${VERSION}, so run \`agentsocks install\` (or kill ${p.pid}) and the next command starts the new one`;
     healthy = check(p.version === VERSION && buildLine === undefined, "broker", detail) && healthy;
     const cwd = brokerCwdCheck(p.pid, processCwd(p.pid), existsSync, process.platform);
-    healthy = check(cwd.ok, "broker working directory", cwd.detail) && healthy;
+    if (cwd.status === "unknown") console.log(`note: broker working directory unknown — ${cwd.detail}`);
+    else healthy = check(cwd.status === "ok", "broker working directory", cwd.detail) && healthy;
   } catch (err) {
     healthy = check(false, "broker", (err as Error).message) && healthy;
   }

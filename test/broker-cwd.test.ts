@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ import { root, until } from "./support.ts";
 import { brokerCall, startBroker } from "../src/client.ts";
 import { sendMessage } from "../src/send.ts";
 import { brokerCwdCheck, processCwd } from "../src/procinfo.ts";
+import { anchoredEnv } from "../src/paths.ts";
 
 const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const childLog = join(root, "codex-child.log");
@@ -117,16 +118,95 @@ test("the broker's working directory is read from /proc on Linux and from lsof e
   assert.equal(processCwd(42, "darwin", darwin("p42\n")), undefined);
 });
 
-test("doctor fails the broker's working directory when it no longer exists, and says how to recover", () => {
+test("doctor fails the broker's working directory when it no longer exists, says how to recover, and calls an unreadable one unknown", () => {
   const live = brokerCwdCheck(42, { path: "/home/me", deleted: false }, () => true, "darwin");
-  assert.equal(live.ok, true);
+  assert.equal(live.status, "ok");
   assert.match(live.detail, /\/home\/me/);
   const gone = brokerCwdCheck(42, { path: "/work/tree", deleted: false }, () => false, "darwin");
-  assert.equal(gone.ok, false);
+  assert.equal(gone.status, "gone");
   assert.match(gone.detail, /\/work\/tree no longer exists/);
   assert.match(gone.detail, /kill 42/);
-  assert.equal(brokerCwdCheck(42, { path: "/work/tree", deleted: true }, () => true, "linux").ok, false, "a recreated path does not hide a deleted directory on Linux");
+  assert.equal(brokerCwdCheck(42, { path: "/work/tree", deleted: true }, () => true, "linux").status, "gone", "a recreated path does not hide a deleted directory on Linux");
   const unknown = brokerCwdCheck(42, undefined, () => true, "darwin");
-  assert.equal(unknown.ok, true);
+  assert.equal(unknown.status, "unknown", "an unreadable directory is neither a pass nor a failure");
   assert.match(unknown.detail, /could not be read.*lsof/);
+});
+
+test("path-valued variables are anchored to the caller's directory; names, commands without a slash and absolute paths are kept", () => {
+  const env = anchoredEnv(
+    {
+      AGENTSOCKS_RUNTIME_DIR: "./rt",
+      AGENTSOCKS_STATE_DIR: "st",
+      AGENTSOCKS_CONFIG: "../cfg/agentsocks.json",
+      AGENTSOCKS_CCSOCKS_DIR: "/abs/cc",
+      CODEX_HOME: "codex-home",
+      XDG_STATE_HOME: "xdg-state",
+      TS_SOCKET: "ts.sock",
+      AGENTSOCKS_CODEX_BIN: "bin/codex",
+      AGENTSOCKS_TAILSCALE_BIN: "tailscale",
+      AGENTSOCKS_CLASSIFIER_KEY: "relative-looking-value",
+      OMP_PROFILE: "work",
+      PATH: "/usr/bin::bin",
+    },
+    "/caller/dir",
+  );
+  assert.equal(env.AGENTSOCKS_RUNTIME_DIR, "/caller/dir/rt");
+  assert.equal(env.AGENTSOCKS_STATE_DIR, "/caller/dir/st");
+  assert.equal(env.AGENTSOCKS_CONFIG, "/caller/cfg/agentsocks.json");
+  assert.equal(env.AGENTSOCKS_CCSOCKS_DIR, "/abs/cc");
+  assert.equal(env.CODEX_HOME, "/caller/dir/codex-home");
+  assert.equal(env.XDG_STATE_HOME, "/caller/dir/xdg-state");
+  assert.equal(env.TS_SOCKET, "/caller/dir/ts.sock");
+  assert.equal(env.AGENTSOCKS_CODEX_BIN, "/caller/dir/bin/codex");
+  assert.equal(env.AGENTSOCKS_TAILSCALE_BIN, "tailscale", "a bare command is still looked up on PATH");
+  assert.equal(env.AGENTSOCKS_CLASSIFIER_KEY, "relative-looking-value");
+  assert.equal(env.OMP_PROFILE, "work");
+  assert.equal(env.PATH, "/usr/bin:/caller/dir:/caller/dir/bin", "an empty PATH entry meant the caller's directory");
+});
+
+async function inRelativeSetup<T>(dir: string, vars: Record<string, string>, run: () => Promise<T>): Promise<T> {
+  const back = process.cwd();
+  const saved = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+  mkdirSync(dir, { recursive: true });
+  process.chdir(dir);
+  Object.assign(process.env, vars);
+  try {
+    return await run();
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    process.chdir(back);
+  }
+}
+
+test("startBroker with a relative runtime and state directory starts a broker the caller can reach, keeping its files where they were", async () => {
+  const project = join(root, "rel-project");
+  await inRelativeSetup(project, { AGENTSOCKS_RUNTIME_DIR: "./rt", AGENTSOCKS_STATE_DIR: "./st" }, async () => {
+    startBroker();
+    let pong: { pid: number } | undefined;
+    try {
+      pong = await brokerUp();
+      assert.ok(existsSync(join(project, "rt", "broker.sock")), "the socket is where the caller looks");
+      assert.ok(existsSync(join(project, "st", "agentsocks.db")), "the state stays under the caller's directory");
+      assert.ok(!existsSync(join(homedir(), "rt")), "nothing is rebased onto the home directory");
+    } finally {
+      if (pong) await stopDaemon(pong.pid);
+    }
+  });
+});
+
+test("a daemon run directly with a relative runtime directory resolves it before it moves to the home directory", async () => {
+  const project = join(root, "rel-direct");
+  await inRelativeSetup(project, { AGENTSOCKS_RUNTIME_DIR: "./rt2", AGENTSOCKS_STATE_DIR: "./st2" }, async () => {
+    const child = spawn(process.execPath, [cli, "daemon"], { cwd: project, env: { ...process.env }, stdio: "ignore" });
+    try {
+      assert.equal((await brokerUp()).pid, child.pid);
+      assert.ok(existsSync(join(project, "rt2", "broker.sock")));
+      assert.equal(cwdOf(child.pid!), realpathSync(homedir()));
+    } finally {
+      await stopDaemon(child.pid!);
+    }
+  });
 });

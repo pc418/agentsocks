@@ -104,10 +104,10 @@ export function processCwd(pid: number, platform: NodeJS.Platform = process.plat
   return name && name.length > 1 ? { path: name.slice(1), deleted: false } : undefined;
 }
 
-export function brokerCwdCheck(pid: number, cwd: { path: string; deleted: boolean } | undefined, exists: (path: string) => boolean, platform: NodeJS.Platform): { ok: boolean; detail: string } {
-  if (!cwd) return { ok: true, detail: `could not be read (${hasProcfs(platform) ? `/proc/${pid}/cwd` : "lsof"} gave nothing)` };
-  if (cwd.deleted || !exists(cwd.path)) return { ok: false, detail: `${cwd.path} no longer exists, so its child processes fail; run \`agentsocks install\` (or kill ${pid}) and the next command starts a broker that works from the home directory` };
-  return { ok: true, detail: cwd.path };
+export function brokerCwdCheck(pid: number, cwd: { path: string; deleted: boolean } | undefined, exists: (path: string) => boolean, platform: NodeJS.Platform): { status: "ok" | "gone" | "unknown"; detail: string } {
+  if (!cwd) return { status: "unknown", detail: `could not be read (${hasProcfs(platform) ? `/proc/${pid}/cwd` : "lsof"} gave nothing), so whether it still exists is not checked` };
+  if (cwd.deleted || !exists(cwd.path)) return { status: "gone", detail: `${cwd.path} no longer exists, so its child processes fail; run \`agentsocks install\` (or kill ${pid}) and the next command starts a broker that works from the home directory` };
+  return { status: "ok", detail: cwd.path };
 }
 
 export function validKillTarget(pid: unknown): pid is number {

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, chmodSync, lstatSync, realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 const uid = (): number => process.getuid?.() ?? 0;
 
@@ -10,6 +10,57 @@ export function stableCwd(home: string = homedir()): string {
     if (home && statSync(home).isDirectory()) return home;
   } catch {}
   return "/";
+}
+
+export const PATH_ENV = [
+  "HOME",
+  "TMPDIR",
+  "XDG_RUNTIME_DIR",
+  "XDG_STATE_HOME",
+  "XDG_CONFIG_HOME",
+  "XDG_CACHE_HOME",
+  "XDG_DATA_HOME",
+  "AGENTSOCKS_RUNTIME_DIR",
+  "AGENTSOCKS_STATE_DIR",
+  "AGENTSOCKS_CONFIG",
+  "AGENTSOCKS_CCSOCKS_DIR",
+  "AGENTSOCKS_CLAUDE_SESSIONS_DIR",
+  "AGENTSOCKS_CLAUDE_PROJECTS_DIR",
+  "AGENTSOCKS_PROC_ROOT",
+  "TS_SOCKET",
+  "CODEX_HOME",
+  "CLAUDE_CONFIG_DIR",
+  "COPILOT_HOME",
+  "CURSOR_CONFIG_DIR",
+  "GEMINI_CLI_HOME",
+  "HERMES_HOME",
+  "OPENCODE_CONFIG_DIR",
+  "PI_CODING_AGENT_DIR",
+  "PI_CONFIG_DIR",
+] as const;
+
+export const COMMAND_ENV = ["AGENTSOCKS_CODEX_BIN", "AGENTSOCKS_TAILSCALE_BIN"] as const;
+
+export function anchoredEnv(env: NodeJS.ProcessEnv, base: string): NodeJS.ProcessEnv {
+  const out = { ...env };
+  for (const name of PATH_ENV) {
+    const value = out[name];
+    if (value && !isAbsolute(value)) out[name] = resolve(base, value);
+  }
+  for (const name of COMMAND_ENV) {
+    const value = out[name];
+    if (value && value.includes("/") && !isAbsolute(value)) out[name] = resolve(base, value);
+  }
+  if (out.PATH !== undefined) out.PATH = out.PATH.split(":").map((dir) => (isAbsolute(dir) ? dir : resolve(base, dir))).join(":");
+  return out;
+}
+
+export function callerDir(): string | undefined {
+  try {
+    return process.cwd();
+  } catch {
+    return undefined;
+  }
 }
 
 export interface SocketContext {

@@ -1,7 +1,7 @@
 import { createConnection } from "node:net";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { brokerSocketPath, stableCwd } from "./paths.ts";
+import { anchoredEnv, brokerSocketPath, callerDir, stableCwd } from "./paths.ts";
 import { readLines } from "./ccsocks.ts";
 
 export function cliEntry(): string {
@@ -52,11 +52,12 @@ function once(op: string, args: Record<string, unknown>, timeoutMs: number): Pro
 
 export function startBroker(): void {
   const cwd = stableCwd();
+  const caller = callerDir();
   const child = spawn(process.execPath, [cliEntry(), "daemon"], {
     cwd,
     detached: true,
     stdio: "ignore",
-    env: { ...process.env, PWD: cwd, NODE_NO_WARNINGS: "1" },
+    env: { ...(caller === undefined ? process.env : anchoredEnv(process.env, caller)), PWD: cwd, NODE_NO_WARNINGS: "1" },
   });
   child.unref();
 }
