@@ -534,10 +534,12 @@ moves there when it starts, and runs its child processes there (`codex queue`, `
 `tailscale`, and the holders for Claude Code's session list). Removing a project folder or a git
 worktree that a session ran in never breaks waking. A relative path in `AGENTSOCKS_RUNTIME_DIR`,
 `AGENTSOCKS_STATE_DIR`, `AGENTSOCKS_CONFIG`, the other `AGENTSOCKS_*` directories, `CODEX_HOME` and
-the other agent homes, `XDG_*`, `TMPDIR` or `TS_SOCKET`, in `AGENTSOCKS_CODEX_BIN` or
-`AGENTSOCKS_TAILSCALE_BIN` when it contains a `/`, or in `PATH`, is resolved against the directory
-the broker was started from before it moves, so the broker and the command that started it agree on
-every file. `agentsocks doctor` reports the broker's working directory (from `/proc` on Linux,
+the other agent homes, `XDG_*`, `TMPDIR`, `TMP`, `TEMP` or `TS_SOCKET`, in `AGENTSOCKS_CODEX_BIN`
+or `AGENTSOCKS_TAILSCALE_BIN` when it contains a `/`, or in `PATH`, is resolved against the directory
+the broker was started from before it moves. The command that starts the broker works out the final,
+absolute runtime and state directories once, including the fallback to `/tmp/agentsocks-<uid>` when a
+socket path would be too long, and hands them to the broker, which uses them as they are. So the
+broker listens on exactly the socket its starter dials. `agentsocks doctor` reports the broker's working directory (from `/proc` on Linux,
 `lsof` elsewhere) and fails the check when that directory no longer exists, as it can for a broker
 started by an earlier release; `agentsocks install` replaces such a broker. When the directory cannot
 be read, doctor says it is unknown instead of passing.

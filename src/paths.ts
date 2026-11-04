@@ -15,6 +15,8 @@ export function stableCwd(home: string = homedir()): string {
 export const PATH_ENV = [
   "HOME",
   "TMPDIR",
+  "TMP",
+  "TEMP",
   "XDG_RUNTIME_DIR",
   "XDG_STATE_HOME",
   "XDG_CONFIG_HOME",
@@ -61,6 +63,21 @@ export function callerDir(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function absolute(path: string): string {
+  if (isAbsolute(path)) return path;
+  const here = callerDir();
+  return here === undefined ? path : resolve(here, path);
+}
+
+export const RESOLVED_RUNTIME_DIR = "AGENTSOCKS_RESOLVED_RUNTIME_DIR";
+export const RESOLVED_STATE_DIR = "AGENTSOCKS_RESOLVED_STATE_DIR";
+
+export function brokerEnv(): NodeJS.ProcessEnv {
+  const caller = callerDir();
+  const resolved = { [RESOLVED_RUNTIME_DIR]: runtimeDir(), [RESOLVED_STATE_DIR]: stateDir() };
+  return { ...(caller === undefined ? process.env : anchoredEnv(process.env, caller)), ...resolved };
 }
 
 export interface SocketContext {
@@ -114,12 +131,16 @@ function standardRuntimeDir(): string | undefined {
 function systemContext(): SocketContext {
   const looksUp = !process.env.XDG_RUNTIME_DIR && process.platform === "linux";
   const standardRuntime = looksUp ? standardRuntimeDir() : undefined;
-  return { platform: process.platform, env: process.env, uid: uid(), tmpdir: tmpdir(), ...(standardRuntime && { standardRuntime }) };
+  const xdg = process.env.XDG_RUNTIME_DIR;
+  const env = xdg ? { ...process.env, XDG_RUNTIME_DIR: absolute(xdg) } : process.env;
+  return { platform: process.platform, env, uid: uid(), tmpdir: absolute(tmpdir()), ...(standardRuntime && { standardRuntime }) };
 }
 
 export function runtimeDir(): string {
+  const resolved = process.env[RESOLVED_RUNTIME_DIR];
+  if (resolved) return resolved;
   const override = process.env.AGENTSOCKS_RUNTIME_DIR;
-  return override || runtimeDirFor(systemContext());
+  return override ? absolute(override) : runtimeDirFor(systemContext());
 }
 
 export const brokerSocketPath = (): string => join(runtimeDir(), "broker.sock");
@@ -163,10 +184,11 @@ export function namespacedSocketPath(threadId: string): string | undefined {
 }
 
 export function stateDir(): string {
+  const resolved = process.env[RESOLVED_STATE_DIR];
+  if (resolved) return resolved;
   const override = process.env.AGENTSOCKS_STATE_DIR;
-  if (override) return override;
-  const base = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state");
-  return join(base, "agentsocks");
+  if (override) return absolute(override);
+  return absolute(join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "agentsocks"));
 }
 
 export const dbPath = (): string => join(stateDir(), "agentsocks.db");

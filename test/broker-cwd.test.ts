@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { root, until } from "./support.ts";
 import { brokerCall, startBroker } from "../src/client.ts";
 import { sendMessage } from "../src/send.ts";
 import { brokerCwdCheck, processCwd } from "../src/procinfo.ts";
-import { anchoredEnv } from "../src/paths.ts";
+import { anchoredEnv, brokerEnv, brokerSocketPath, RESOLVED_RUNTIME_DIR, RESOLVED_STATE_DIR, runtimeDir, stateDir } from "../src/paths.ts";
 
 const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const childLog = join(root, "codex-child.log");
@@ -208,5 +208,91 @@ test("a daemon run directly with a relative runtime directory resolves it before
     } finally {
       await stopDaemon(child.pid!);
     }
+  });
+});
+
+async function withEnv<T>(dir: string, set: Record<string, string>, unset: string[], run: () => Promise<T>): Promise<T> {
+  const back = process.cwd();
+  const names = [...Object.keys(set), ...unset];
+  const saved = Object.fromEntries(names.map((k) => [k, process.env[k]]));
+  mkdirSync(dir, { recursive: true });
+  process.chdir(dir);
+  for (const k of unset) delete process.env[k];
+  Object.assign(process.env, set);
+  try {
+    return await run();
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    process.chdir(back);
+  }
+}
+
+const DERIVED = ["AGENTSOCKS_RUNTIME_DIR", "XDG_RUNTIME_DIR", "TMPDIR", "TMP", "TEMP"];
+const shortFallback = () => ({ TERMUX_VERSION: "test", PREFIX: join(root, "px") });
+
+const insideRunRoot = (path: string): boolean => {
+  const abs = resolve(path);
+  return abs.startsWith(`${root}/`) || abs.startsWith(`${realpathSync(root)}/`);
+};
+
+async function startedFromHere(): Promise<void> {
+  const dialled = brokerSocketPath();
+  assert.ok(insideRunRoot(dialled), `the socket this test dials stays inside the run root: ${dialled}`);
+  startBroker();
+  const pong = await brokerUp();
+  try {
+    assert.ok(existsSync(dialled), "the broker listens where the client dials");
+  } finally {
+    await stopDaemon(pong.pid);
+  }
+}
+
+test("anchoredEnv also anchors TMP and TEMP, which the temp directory falls back to", () => {
+  const env = anchoredEnv({ TMP: "tmp-rel", TEMP: "./temp-rel" }, "/caller/dir");
+  assert.equal(env.TMP, "/caller/dir/tmp-rel");
+  assert.equal(env.TEMP, "/caller/dir/temp-rel");
+});
+
+test("with only a relative TMP, startBroker starts a broker on the socket the caller dials", async () => {
+  await withEnv(join(root, "tmp-caller"), { TMP: "tmp", ...shortFallback() }, DERIVED, startedFromHere);
+});
+
+test("a relative TMPDIR from a deep directory: the long absolute path falls back the same way for client and broker", async () => {
+  const deep = join(root, `deep-${"x".repeat(48)}`);
+  await withEnv(deep, { TMPDIR: "tmp", ...shortFallback() }, DERIVED, async () => {
+    assert.ok(Buffer.byteLength(join(deep, "tmp", "agentsocks-0", "t", `${"x".repeat(36)}.sock`)) > 103, "the case needs a probe that does not fit when absolute");
+    await startedFromHere();
+  });
+});
+
+test("a daemon run by hand with a relative TMPDIR from a deep directory listens where its caller dials", async () => {
+  const deep = join(root, `hand-${"y".repeat(48)}`);
+  await withEnv(deep, { TMPDIR: "tmp", ...shortFallback() }, DERIVED, async () => {
+    const dialled = brokerSocketPath();
+    assert.ok(insideRunRoot(dialled), `inside the run root: ${dialled}`);
+    const child = spawn(process.execPath, [cli, "daemon"], { cwd: deep, env: { ...process.env }, stdio: "ignore" });
+    try {
+      assert.equal((await brokerUp()).pid, child.pid);
+      assert.ok(existsSync(dialled));
+    } finally {
+      await stopDaemon(child.pid!);
+    }
+  });
+});
+
+test("the broker's environment carries the caller's final runtime and state directories, which win over any temp variable, without turning on the runtime override", async () => {
+  await withEnv(join(root, "pin-caller"), { TMPDIR: "tmp", AGENTSOCKS_STATE_DIR: "st", ...shortFallback() }, DERIVED, async () => {
+    const env = brokerEnv();
+    assert.equal(env[RESOLVED_RUNTIME_DIR], runtimeDir());
+    assert.equal(env[RESOLVED_STATE_DIR], join(process.cwd(), "st"));
+    assert.ok(env[RESOLVED_RUNTIME_DIR]!.startsWith("/"), "absolute");
+    assert.equal(env.AGENTSOCKS_RUNTIME_DIR, undefined, "an unset override stays unset, so the cc-socks namespace is still offered");
+  });
+  await withEnv(join(root, "pin-daemon"), { [RESOLVED_RUNTIME_DIR]: "/pinned/rt", [RESOLVED_STATE_DIR]: "/pinned/st", TMPDIR: "elsewhere" }, DERIVED, async () => {
+    assert.equal(runtimeDir(), "/pinned/rt");
+    assert.equal(stateDir(), "/pinned/st");
   });
 });

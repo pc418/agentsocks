@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { Server, Socket } from "node:net";
 import { Store, type NewMessage, type OutboxRow, type OutboxStatus, type ThreadRow } from "./store.ts";
 import { SendError, closeServer, listenUnix, postLines, readLines, serveInbox, vetTarget, type ListenOptions } from "./ccsocks.ts";
-import { anchoredEnv, brokerSocketPath, callerDir, canonicalPath, ccSocksDir, stableCwd, codexHexName, dbPath, ensurePrivateDir, inboxKind, killSwitchOn, namespacedSocketPath, runtimeDir, stateDir, threadSocketName, threadSocketPath } from "./paths.ts";
+import { brokerEnv, brokerSocketPath, canonicalPath, ccSocksDir, stableCwd, codexHexName, dbPath, ensurePrivateDir, inboxKind, killSwitchOn, namespacedSocketPath, runtimeDir, stateDir, threadSocketName, threadSocketPath } from "./paths.ts";
 import { decodeAddress, encodeAddress, messageContent, parseEnvelope, userFrame } from "./envelope.ts";
 import {
   InboundLimiter,
@@ -1735,8 +1735,7 @@ function runQuiet(cmd: string, args: string[], timeoutMs: number, cwd: string): 
 }
 
 export async function runDaemon(): Promise<void> {
-  const caller = callerDir();
-  if (caller !== undefined) Object.assign(process.env, anchoredEnv(process.env, caller));
+  Object.assign(process.env, brokerEnv());
   const cwd = stableCwd();
   process.chdir(cwd);
   process.env.PWD = cwd;
