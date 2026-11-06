@@ -186,7 +186,7 @@ Hermes, Cursor, Copilot CLI and Gemini CLI do not say which session made an MCP 
 OMP is the one of these that gets the whole treatment, like OpenCode: tools, a note in the middle of a turn, a nudge at the end of one, and a wake when idle. It is also **untested live**. The extension targets OMP 18.10.3 (`doctor` says so, and calls another major partly wired). An earlier 0.4 build passed `scripts/live/omp.sh` against omp 18.10.3; this release has not been run live. `scripts/live/omp.sh` is the run that would show it.
 
 - **How it connects.** `agentsocks install --omp` writes one file, `extensions/agentsocks.ts`, in OMP's agent folder (`~/.omp/agent`, or `$PI_CODING_AGENT_DIR`; `$PI_CONFIG_DIR` renames `~/.omp`; `OMP_PROFILE` or `PI_PROFILE` selects `~/.omp/profiles/<name>/agent`, and then `PI_CODING_AGENT_DIR` does not apply, as in OMP). Its first line marks it as ours, it is mode 600, and OMP loads it the next time it starts. `uninstall` deletes only a file with that marker, from the agent folder and from every profile folder.
-- **Tools.** `agentsocks_list_peers`, `agentsocks_send_message`, `agentsocks_read_inbox`, `agentsocks_wait_for_message`, the task, channel, ask and rating tools: one for every tool the Codex route has, always loaded, with the `read` approval tier for the read-only ones and `write` for the rest (OMP's default mode, `yolo`, allows both). The prefix is there because OMP has its own `ask`. The session a tool acts for is the one OMP says it is running, read from OMP when the tool is called, so a model cannot name another.
+- **Tools.** `agentsocks_list_peers`, `agentsocks_send_message`, `agentsocks_read_inbox`, `agentsocks_wait_for_message`, the task, channel, ask and rating tools: one for every tool the Codex route has, always loaded, with the `read` approval tier for the read-only ones and `write` for the rest (OMP's default mode, `yolo`, allows both). The prefix is there because OMP has its own `ask`. Each hook also reports the session's current `tools.approvalMode`, read from OMP's own settings (so `--approval-mode`, `--yolo` and a change in `/settings` count): `always-ask` and `always-ask-cached` send as `prompting`, `write` and `yolo` as `bypass`. The session a tool acts for is the one OMP says it is running, read from OMP when the tool is called, so a model cannot name another.
 - **What the model is told.** After a tool result, when a message waits, OMP adds one line to the next request as context: `📨 agentsocks: new message from a Claude Code session. Read it with agentsocks_read_inbox before your next step.` A hidden note of the same kind goes in before a turn if one waits when you submit a prompt. When the model finishes with a message unread, one more turn is asked for with the finish-time line, at most three times in a row. The lines are counts and a sender kind, never message text.
 - **Idle wake.** The extension long-polls the broker, and a message for an idle session starts a turn with the line `📨 agentsocks: new message from a Claude Code session. Read it with agentsocks_read_inbox.` as a custom message of type `agentsocks-notice`. The extension never types as the user. While the model is working the line goes in as an aside at the next step instead.
 - **Subagents.** Only a top-level session is a peer. Subagents (`task`, `/tan` clones), an advisor and anything else OMP does not call the main agent get no tools, no notices and no wake.
@@ -594,9 +594,12 @@ The peer is named `grok (api)` so nobody mistakes it for a session, and its mess
   plain text. `--json` output is plain data.
 - **No approvals by message.** A message cannot approve a permission prompt or change settings, in
   either agent. Each session's own permission mode still applies to anything a peer asks for.
-- **Honest sender mode.** A Codex sender reports its real permission mode (`bypass` only when its
-  approval policy is `never`), so a Claude session that holds messages from bypassing senders still
-  does. A digest claims the weakest mode among its messages.
+- **Sender mode.** A message from a local agent session tells Claude whether the sender asks before it
+  acts. Only the modes that do are `prompting`: Codex `plan` (or approval policy `untrusted`), OMP
+  `always-ask` and `always-ask-cached`. Everything else, Codex's Auto preset and `default` included, is
+  `bypass`, and so is a session that never reported a mode, so a Claude session that bypasses permissions
+  does not hold their messages for your approval. A plain shell and a remote peer report no mode, and their
+  messages are still held. A digest claims the weakest mode among its messages.
 - **Limits** mirror Claude Code's inbox: 64 KiB per message, 30 messages per sender with a refill of
   one every two seconds (checked before any routing work), identical text merged, at most 200 unread per
   Codex thread.

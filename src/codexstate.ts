@@ -106,8 +106,3 @@ export async function recentCodexThreads(sinceMs: number, limit = 500): Promise<
   });
   return (found ?? []).filter((t): t is CodexThreadInfo => !!t && CODEX_THREAD_ID.test(t.id));
 }
-
-export function permissionModeFromApproval(approvalMode: string | undefined): string | undefined {
-  if (!approvalMode) return undefined;
-  return approvalMode === "never" ? "bypassPermissions" : "default";
-}

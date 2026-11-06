@@ -18,6 +18,7 @@ export interface Deps {
   node: string;
   cli: string;
   tools: readonly OmpTool[];
+  approvalMode?: () => Promise<string | undefined>;
 }
 
 export interface Context {
@@ -45,6 +46,27 @@ export interface Pi {
     execute: (toolCallId: string, params: Record<string, unknown>, signal: AbortSignal | undefined, onUpdate: unknown, ctx: Context) => Promise<{ content: { type: "text"; text: string }[] }>;
   }): void;
   sendMessage(message: { customType: string; content: string; display: boolean }, options: { triggerTurn?: boolean; deliverAs?: "aside" }): void;
+}
+
+// OMP's effective tools.approvalMode (its --approval-mode and --yolo flags, project config and /settings included).
+// OMP serves its own modules to an extension only once the session is running, so they are loaded on first use, and
+// loaded again later if that failed. The mode itself is read on every call, so a change in /settings is seen.
+export function approvalModeReader(load: () => Promise<readonly unknown[]>): () => Promise<string | undefined> {
+  let modules: Promise<readonly unknown[]> | undefined;
+  return async () => {
+    const loading = (modules ??= load());
+    try {
+      const [settingsModule, approvalModule] = (await loading) as [
+        { Settings?: { instance?: unknown } } | undefined,
+        { resolveApprovalFromContext?: (context: { settings: unknown }) => { approvalMode?: unknown } | undefined } | undefined,
+      ];
+      const mode = approvalModule?.resolveApprovalFromContext?.({ settings: settingsModule?.Settings?.instance })?.approvalMode;
+      return typeof mode === "string" && mode !== "" ? mode.slice(0, 64) : undefined;
+    } catch {
+      if (modules === loading) modules = undefined;
+      return undefined;
+    }
+  };
 }
 
 export function createOmpExtension(deps: Deps, pi: Pi): void {
@@ -143,9 +165,19 @@ export function createOmpExtension(deps: Deps, pi: Pi): void {
       child.stdin!.end(stdin);
     });
 
+  const approvalMode = async (): Promise<string | undefined> => {
+    try {
+      const mode = await deps.approvalMode?.();
+      return typeof mode === "string" && mode !== "" ? mode : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
   const sendHook = async (event: string, session: string, extra: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>> => {
     if (Date.now() < hooksPausedUntil) return {};
-    const reply = await run(["hook", "omp", event], JSON.stringify({ session, remote: sink, ...extra }), timeoutMs);
+    const permissionMode = await approvalMode();
+    const reply = await run(["hook", "omp", event], JSON.stringify({ session, remote: sink, ...extra, ...(permissionMode && { permissionMode }) }), timeoutMs);
     if (reply.timedOut) hooksPausedUntil = Date.now() + HOOK_PAUSE_MS;
     return parse(reply.stdout);
   };

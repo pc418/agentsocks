@@ -22,7 +22,7 @@ export function agentHookRequest(agent: InboxAgentId, f: AgentHookFields): HookR
     agent,
     event: f.event,
     ...(typeof f.cwd === "string" && f.cwd && { cwd: f.cwd }),
-    ...(typeof f.permissionMode === "string" && { permissionMode: f.permissionMode }),
+    ...(typeof f.permissionMode === "string" && f.permissionMode && { permissionMode: f.permissionMode.slice(0, 64) }),
     ...(typeof f.source === "string" && { source: f.source }),
     ...(typeof f.prompt === "string" && { prompt: redactSecrets(f.prompt).slice(0, 500) }),
     ...(typeof f.toolName === "string" && { toolName: f.toolName.slice(0, 64) }),

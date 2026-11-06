@@ -37,7 +37,7 @@ async function hook({ event, input, call }: HookRun): Promise<string | undefined
   if (event === "wake") return pollWakes(input);
   const kind = BROKER_EVENTS.get(event);
   if (!kind) return undefined;
-  const request = agentHookRequest("omp", { session: input.session, event: kind, cwd: input.cwd, prompt: input.prompt, toolName: input.tool, remote: sinkId(input.remote), name: input.name });
+  const request = agentHookRequest("omp", { session: input.session, event: kind, cwd: input.cwd, prompt: input.prompt, toolName: input.tool, remote: sinkId(input.remote), name: input.name, permissionMode: input.permissionMode });
   if (!request) return undefined;
   const result = await call(request);
   if (kind === "SessionEnd") return undefined;

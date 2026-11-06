@@ -77,8 +77,12 @@ the envelope and rejects any mismatch):
 - `from-session`: `^[A-Za-z0-9_-]{1,80}$` or omitted.
 - `from-name`: control/format characters removed, `"<>` removed, trimmed, max 64 characters
   (then `…`).
-- `from-mode`: the sender's real permission class. Codex `bypassPermissions` → `bypass`; any other
-  Codex mode → `prompting`; unknown → omitted (a bypassing Claude receiver will hold it for approval).
+- `from-mode`: the sender's permission class. A local agent session is `prompting` only when it reports a
+  mode that asks before acting: Codex `plan`, or before any hook has reported, approval policy `untrusted`;
+  OMP `always-ask` or `always-ask-cached`. Every other mode (Codex `default`, `acceptEdits`, `dontAsk`,
+  `bypassPermissions`, approval `never`, `on-request`, `on-failure`; OMP `write`, `yolo`; any value not
+  listed) is `bypass`, and so is a local agent session that reported nothing. Plain shells and remote peers
+  attest nothing, so the attribute is omitted and a bypassing Claude receiver holds the message for approval.
 - Body: a closing-tag lookalike (`</cross-session-message`) is neutralised before sending.
 
 `control` frames received on agentsocks sockets: `peer_message_status` with a status of held, denied,
@@ -122,9 +126,9 @@ Inbox states: `queued` → `notified` (the model has been told it exists) → `s
 | message arrives, thread not `busy`, no pending wake, under 6 wakes/hour | after a 1.5 s debounce: `codex queue --thread <id> --message "<wake line>"` (`--remote` when the thread runs on a non-default app-server). The wake line names only the count and what to do. Digests never wake a thread, urgent messages and awaited replies are exempt from the hourly cap of 6 but have their own of 20 per thread per hour (kept separately, so they never use up the ordinary six), only a successful wake counts against either, and a failed wake backs off (30 s, doubling to 10 min) |
 
 Without trusted hooks, the thread registers on its first agentsocks tool call, its state is `unknown`,
-and delivery is wake + `read_inbox`. `from-mode` is then unknown and omitted, because the MCP request
-metadata carries the sandbox but not the approval policy (Codex derives `bypassPermissions` from
-approval policy `never` alone).
+and delivery is wake + `read_inbox`. Its mode then comes from the approval policy in the Codex state DB,
+because the MCP request metadata carries the sandbox but not the approval policy; with no state row either,
+it is unknown and counts as `bypass` (see `from-mode`).
 
 `read_inbox` / `wait_for_message` output:
 ```
@@ -201,8 +205,9 @@ sender natively with `SendMessage` to the `from=` address. Metrics (`stats`) are
   Wake lines contain no peer text.
 - No message can approve anything: Claude Code enforces it; the Codex frame states it, and Codex's
   own approval policy still applies to any action.
-- `from-mode` is asserted honestly from the sender's real mode; a digest claims the weakest class among
-  its messages (never `bypass` unless every one was).
+- `from-mode` follows the sender's reported mode, and a local agent session that reported none counts as
+  `bypass` (a deliberate choice: such a session is far more often a bypassing one than an asking one). A
+  digest claims the weakest class among its messages (never `bypass` unless every one was).
 - Addresses are canonicalised (`path.resolve`, and the real path of the directory) before they key a
   budget, a duplicate check, the outbox or a task, so `/./` and symlinked spellings of one socket are one
   receiver. A Claude target is resolved through its registry record, and its session id is used only if

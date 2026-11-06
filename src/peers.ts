@@ -6,6 +6,7 @@ import { decodeAddress, encodeAddress, type Mode } from "./envelope.ts";
 import { canonicalPath, inboxKind, threadSocketPath } from "./paths.ts";
 import { recentCodexThreads, type CodexThreadInfo } from "./codexstate.ts";
 import { cleanText, STALE_PEER_MS } from "./limits.ts";
+import { localSessionMode } from "./modes.ts";
 import type { RemotePeerInfo } from "./gateway/remote.ts";
 import { kindLabel, threadIdFor, type AgentId } from "./agents/types.ts";
 
@@ -72,15 +73,14 @@ function assignRefs(peers: Omit<Peer, "ref">[], taken: string[] = []): Peer[] {
 
 export async function codexIdentity(threadId: string, cwd?: string): Promise<Me> {
   const t = await brokerCall<ThreadInfo>("register", { threadId, ...(cwd && { cwd }) });
-  const mode = t.mode === "bypass" || t.mode === "prompting" ? (t.mode as Mode) : undefined;
-  return { kind: "codex", name: t.name, socketPath: t.socketPath, session: threadId, ...(mode && { mode }) };
+  return { kind: "codex", name: t.name, socketPath: t.socketPath, session: threadId, mode: localSessionMode(t.mode) };
 }
 
 export async function agentIdentity(agent: AgentId, session: string, cwd?: string): Promise<Me> {
   const threadId = threadIdFor(agent, session);
   if (!threadId) throw new Error("that is not a session id agentsocks can use");
   const t = await brokerCall<ThreadInfo>("register", { threadId, agent, ...(cwd && { cwd }) });
-  return { kind: "codex", agent, name: t.name, socketPath: t.socketPath, session: threadId };
+  return { kind: "codex", agent, name: t.name, socketPath: t.socketPath, session: threadId, mode: localSessionMode(t.mode) };
 }
 
 export function claudeIdentity(): Me | undefined {

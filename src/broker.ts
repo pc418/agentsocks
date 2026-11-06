@@ -48,7 +48,8 @@ import { audit } from "./audit.ts";
 import { exitAfterFlush } from "./exit.ts";
 import { listClaudeSessions, pidAlive, type ClaudeSession } from "./claude.ts";
 import { processArgs, buildHash } from "./procinfo.ts";
-import { findCodexThread, permissionModeFromApproval } from "./codexstate.ts";
+import { findCodexThread } from "./codexstate.ts";
+import { modeFromApproval, modeFromReported } from "./modes.ts";
 import { SWEEP_STAGES, type SweepStage } from "./sweep/index.ts";
 import { OPS } from "./brokerops/index.ts";
 import { livePeerNames, normalizeSessionName, sanitizeSessionName, sessionNameRefusal } from "./brokerops/threads.ts";
@@ -101,11 +102,6 @@ interface ReceiverRef {
   sessionId: string | null;
   path: string;
   cwd?: string;
-}
-
-export function modeFromCodex(permissionMode: string | undefined | null): "bypass" | "prompting" | null {
-  if (!permissionMode) return null;
-  return permissionMode === "bypassPermissions" ? "bypass" : "prompting";
 }
 
 export function codexIntro(name: string): string {
@@ -538,16 +534,14 @@ export class Broker {
     const agent = isRemoteThread(this, threadId) ? "codex" : (agentOfThreadId(threadId) ?? info.agent ?? existing?.agent ?? "codex");
     let subagent: boolean | undefined = agent === "codex" ? undefined : false;
     const lacksDefaults = !existing || !existing.mode;
+    let stateMode: ThreadRow["mode"] = null;
     if (agent === "codex" && (lacksDefaults || existing.subagent === null)) {
       const known = await findCodexThread({ id: threadId });
       subagent = known?.subagent ?? (existing?.subagent === 1);
       if (known) {
         if (lacksDefaults) {
-          info = {
-            ...info,
-            cwd: info.cwd ?? known.cwd,
-            permissionMode: info.permissionMode ?? permissionModeFromApproval(known.approvalMode),
-          };
+          info = { ...info, cwd: info.cwd ?? known.cwd };
+          stateMode = modeFromApproval(known.approvalMode);
         }
         if (!existing && known.name) {
           const title = cleanText(known.name, 64);
@@ -562,7 +556,7 @@ export class Broker {
     }
     const fields: Partial<ThreadRow> = {};
     if (info.cwd) fields.cwd = info.cwd;
-    const mode = modeFromCodex(info.permissionMode);
+    const mode = modeFromReported(agent, info.permissionMode) ?? stateMode;
     if (mode) fields.mode = mode;
     if (info.remote) fields.remote = info.remote;
     if (info.state) fields.state = info.state;

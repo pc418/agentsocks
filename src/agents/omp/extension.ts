@@ -1,6 +1,6 @@
 import { describeFor, toolsFor, type Tool } from "../../tools/index.ts";
 import { zodSource } from "../opencode/zodsource.ts";
-import { createOmpExtension } from "./runtime.ts";
+import { approvalModeReader, createOmpExtension } from "./runtime.ts";
 
 export const EXTENSION_MARKER = "// agentsocks:managed omp-extension";
 export const EXTENSION_FILE = "agentsocks.ts";
@@ -44,9 +44,11 @@ export function extensionSource(spec: ExtensionSpec): string {
     `const CLI = ${JSON.stringify(spec.cli)};`,
     `const TOOLS = [\n${entries.join("\n")}\n];`,
     `const createExtension = ${createOmpExtension.toString()};`,
+    `const readApprovalMode = ${approvalModeReader.toString()};`,
     ``,
     `export default function agentsocks(pi) {`,
-    `  createExtension({ spawn, randomBytes, node: NODE, cli: CLI, tools: TOOLS }, pi);`,
+    `  const approvalMode = readApprovalMode(() => Promise.all([import("@oh-my-pi/pi-coding-agent/config/settings"), import("@oh-my-pi/pi-coding-agent/tools/approval")]));`,
+    `  createExtension({ spawn, randomBytes, node: NODE, cli: CLI, tools: TOOLS, approvalMode }, pi);`,
     `}`,
     ``,
   ].join("\n");

@@ -10,6 +10,9 @@ const id = (n: number) => `0199eeee-0000-7000-8000-${String(n).padStart(12, "0")
 const USER = id(1);
 const SPAWN = id(2);
 const FRESH = id(3);
+const UNTRUSTED = id(4);
+const AUTO = id(5);
+const HOOK_WINS = id(6);
 
 before(async () => {
   const { DatabaseSync } = await import("node:sqlite");
@@ -22,6 +25,9 @@ before(async () => {
   insert.run(USER, "user", "/work/state-db", "never", Date.now(), "cli", "user", "x");
   insert.run(SPAWN, "spawn", "/work/state-db", "never", Date.now(), "cli", "subagent", "x");
   insert.run(FRESH, "fresh", "/work/fresh", "never", Date.now(), "cli", "user", "x");
+  insert.run(UNTRUSTED, "untrusted", "/work/untrusted", "untrusted", Date.now(), "cli", "user", "x");
+  insert.run(AUTO, "auto", "/work/auto", "on-request", Date.now(), "cli", "user", "x");
+  insert.run(HOOK_WINS, "hookwins", "/work/hook-wins", "untrusted", Date.now(), "cli", "user", "x");
   db.close();
   await broker.start();
 });
@@ -29,7 +35,7 @@ before(async () => {
 after(() => broker.stop());
 
 test("a thread registered before the subagent flag existed keeps the permission mode and cwd its hook supplied", async () => {
-  await broker.hook({ threadId: USER, event: "SessionStart", cwd: "/work/hook", permissionMode: "default" });
+  await broker.hook({ threadId: USER, event: "SessionStart", cwd: "/work/hook", permissionMode: "plan" });
   assert.equal(broker.store.getThread(USER)!.mode, "prompting");
   broker.store.updateThread(USER, { subagent: null });
   await broker.register(USER, {});
@@ -40,7 +46,7 @@ test("a thread registered before the subagent flag existed keeps the permission 
 });
 
 test("the null flag of a thread that has a mode is still looked up, and a subagent is found", async () => {
-  await broker.hook({ threadId: SPAWN, event: "SessionStart", permissionMode: "default" });
+  await broker.hook({ threadId: SPAWN, event: "SessionStart", permissionMode: "plan" });
   broker.store.updateThread(SPAWN, { subagent: null });
   await broker.register(SPAWN, {});
   const row = broker.store.getThread(SPAWN)!;
@@ -54,4 +60,19 @@ test("a thread with no mode still takes its mode and cwd from the state DB", asy
   assert.equal(row.mode, "bypass");
   assert.equal(row.cwd, "/work/fresh");
   assert.equal(row.subagent, 0);
+});
+
+// Only an approval policy that asks first (untrusted) reads as prompting.
+test("a thread with no hook report takes prompting from an untrusted approval policy and bypass from on-request", async () => {
+  await broker.register(UNTRUSTED, {});
+  assert.equal(broker.store.getThread(UNTRUSTED)!.mode, "prompting");
+  await broker.register(AUTO, {});
+  assert.equal(broker.store.getThread(AUTO)!.mode, "bypass", "on-request is Codex's Auto preset");
+});
+
+test("a hook's report wins over the state DB's approval policy", async () => {
+  await broker.hook({ threadId: HOOK_WINS, event: "SessionStart", cwd: "/work/hook-wins", permissionMode: "default" });
+  assert.equal(broker.store.getThread(HOOK_WINS)!.mode, "bypass", "the state DB says untrusted, the hook says default");
+  await broker.hook({ threadId: HOOK_WINS, event: "PostToolUse", permissionMode: "plan" });
+  assert.equal(broker.store.getThread(HOOK_WINS)!.mode, "prompting", "a later report changes it");
 });

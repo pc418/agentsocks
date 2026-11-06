@@ -2,13 +2,14 @@ import { reapPidFile } from "./procs.ts";
 import { test, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { Broker } from "../src/broker.ts";
 import { ompAgent } from "../src/agents/omp.ts";
 import { EXTENSION_MARKER, extensionSource } from "../src/agents/omp/extension.ts";
+import { approvalModeReader } from "../src/agents/omp/runtime.ts";
 import { offerWake, sinkOf } from "../src/agents/opencode/sink.ts";
 import { describeFor, toolsFor } from "../src/tools/index.ts";
 import { encodeAddress } from "../src/envelope.ts";
@@ -30,9 +31,19 @@ const loaded: FakeOmp[] = [];
 let counter = 0;
 const fresh = (): string => `0199c1a2-7b3c-7d4e-8f50-${String(++counter).padStart(12, "0")}`;
 
-async function load(opts: { sessionId?: string; cli?: string; identity?: Identity | null; cwd?: string } = {}): Promise<FakeOmp> {
+// Stand-ins for the two OMP modules the extension reads its approval mode from, served next to the generated file.
+function fakeOmpModules(dir: string): void {
+  const pkg = join(dir, "node_modules", "@oh-my-pi", "pi-coding-agent");
+  mkdirSync(pkg, { recursive: true });
+  writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@oh-my-pi/pi-coding-agent", type: "module", exports: { "./config/settings": "./settings.js", "./tools/approval": "./approval.js" } }));
+  writeFileSync(join(pkg, "settings.js"), "export const Settings = { get instance() { return { mode: globalThis.fakeOmpApprovalMode }; } };\n");
+  writeFileSync(join(pkg, "approval.js"), "export function resolveApprovalFromContext({ settings }) { return { approvalMode: settings.mode, userPolicies: {} }; }\n");
+}
+
+async function load(opts: { sessionId?: string; cli?: string; identity?: Identity | null; cwd?: string; ompModules?: boolean } = {}): Promise<FakeOmp> {
   const dir = tempDir("agentsocks-omp-ext-");
   writeFileSync(join(dir, "package.json"), '{"type":"module"}\n');
+  if (opts.ompModules) fakeOmpModules(dir);
   const file = join(dir, "agentsocks.ts");
   writeFileSync(file, extensionSource({ node: process.execPath, cli: opts.cli ?? CLI }));
   const host = await FakeOmp.load({ file, sessionId: opts.sessionId ?? fresh(), ...(opts.identity !== undefined && { identity: opts.identity }), ...(opts.cwd && { cwd: opts.cwd }) });
@@ -539,4 +550,55 @@ test("a turn's hooks reach agentsocks in the order they happened: a Stop waits f
   await host.emit("session_start");
   await Promise.all([host.emit("before_agent_start", { prompt: "hi" }), host.settle()]);
   assert.deepEqual(order(), ["UserPromptSubmit start", "UserPromptSubmit end", "Stop start", "Stop end"]);
+});
+
+// An OMP session reports its approval mode, so a bypassing Claude session does not hold its messages.
+test("the extension reports OMP's current approval mode with its hooks, and a change in /settings reaches the broker at the next hook", async () => {
+  const g = globalThis as { fakeOmpApprovalMode?: string };
+  const id = fresh();
+  try {
+    g.fakeOmpApprovalMode = "always-ask";
+    const host = await load({ sessionId: id, ompModules: true });
+    await host.emit("session_start");
+    assert.equal(thread(id)!.mode, "prompting");
+    g.fakeOmpApprovalMode = "yolo";
+    await host.emit("tool_result", { toolName: "bash", content: [], isError: false });
+    assert.equal(thread(id)!.mode, "bypass");
+    g.fakeOmpApprovalMode = "always-ask-cached";
+    await host.emit("before_agent_start", { prompt: "next" });
+    assert.equal(thread(id)!.mode, "prompting");
+    assert.deepEqual(host.errors, []);
+  } finally {
+    delete g.fakeOmpApprovalMode;
+  }
+});
+
+test("an OMP whose modules cannot be loaded still registers the session, with no mode reported", async () => {
+  const id = fresh();
+  const host = await load({ sessionId: id });
+  await host.emit("session_start");
+  const t = thread(id);
+  assert.ok(t, "the hook still ran");
+  assert.equal(t.mode, null);
+  assert.deepEqual(host.errors, []);
+});
+
+test("the approval-mode reader loads OMP's modules again after a failed load, and reads the mode afresh on every call", async () => {
+  let loads = 0;
+  let mode: unknown = "write";
+  const modules = [{ Settings: { instance: { tag: "settings" } } }, { resolveApprovalFromContext: ({ settings }: { settings: { tag?: string } }) => ({ approvalMode: settings.tag === "settings" ? mode : undefined }) }];
+  const read = approvalModeReader(async () => {
+    loads++;
+    if (loads === 1) throw new Error("Cannot find package '@oh-my-pi/pi-coding-agent'");
+    return modules;
+  });
+  assert.equal(await read(), undefined, "a failed load reports nothing");
+  assert.equal(await read(), "write", "and the next call loads again");
+  mode = "always-ask";
+  assert.equal(await read(), "always-ask");
+  assert.equal(loads, 2, "a successful load is kept");
+  mode = 7;
+  assert.equal(await read(), undefined, "a value that is not a string is not reported");
+  mode = "x".repeat(200);
+  assert.equal((await read())!.length, 64, "and a long one is cut");
 });

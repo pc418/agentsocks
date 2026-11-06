@@ -39,9 +39,14 @@ agentsocks trusts the operating-system user it runs as, and nothing else.
   tree, so a command that detached itself from it is treated as a plain shell, and any local process of
   your user can claim a Codex identity by naming a Codex thread. Under the trust boundary above that
   gains nothing a process of your user could not already do. The permission mode agentsocks attaches to
-  a Codex sender's messages is that of the thread it names: the mode Codex's hook last reported for it, or
-  before any hook has reported, the thread's approval mode in the Codex state (`never` counts as bypass,
-  anything else as prompting). The attestation is about the named thread, not about the process that asked.
+  a local agent session's messages is that of the session it names: the mode its hook last reported (OMP's
+  extension reports `tools.approvalMode`), or for Codex before any hook has reported, the thread's approval
+  policy in the Codex state. Only a mode that asks before acting counts as prompting (Codex `plan` or
+  `untrusted`, OMP `always-ask` or `always-ask-cached`); every other mode counts as bypass, and so does a
+  session that never reported one. That last rule is a choice, not an observation: a session that asks
+  before acting but whose mode could not be read is sent as bypass, and a bypassing Claude receiver does
+  not hold its message. Plain shells and remote peers attest no mode. The attestation is about the named
+  session, not about the process that asked.
 
 ## Channels and asks
 

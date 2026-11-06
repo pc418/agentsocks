@@ -5,7 +5,7 @@ import { InboundLimiter, bodyTooLarge } from "../src/limits.ts";
 import { Store, MAX_QUEUED_PER_THREAD, type MessageRow } from "../src/store.ts";
 import { addCodexHooks, codexMcpBlock, ourHookKeys, removeAgentsocksTables, removeCodexHooks, shellQuote } from "../src/install.ts";
 import { codexHookOutput, hookRequest } from "../src/hooks.ts";
-import { modeFromCodex } from "../src/broker.ts";
+import { localSessionMode, modeFromApproval, modeFromReported } from "../src/modes.ts";
 
 const msg = (over: Partial<MessageRow> = {}): MessageRow => ({
   id: "m1",
@@ -142,9 +142,46 @@ test("hook input and output follow the Codex schema", () => {
   assert.deepEqual(JSON.parse(codexHookOutput("Stop", { block: "r" })!), { decision: "block", reason: "r" });
   assert.equal(codexHookOutput("Stop", {}), undefined);
   assert.equal(codexHookOutput("UserPromptSubmit", {}), undefined);
-  assert.equal(modeFromCodex("bypassPermissions"), "bypass");
-  assert.equal(modeFromCodex("auto"), "prompting");
-  assert.equal(modeFromCodex(undefined), null);
+});
+
+// Every local agent mode counts as bypass except the ones that ask before acting.
+test("a reported mode is prompting only when it asks before acting; anything else, auto included, is bypass", () => {
+  const codex: [string, "bypass" | "prompting"][] = [
+    ["default", "bypass"],
+    ["acceptEdits", "bypass"],
+    ["dontAsk", "bypass"],
+    ["bypassPermissions", "bypass"],
+    ["plan", "prompting"],
+    ["auto", "bypass"],
+    ["something-new", "bypass"],
+  ];
+  for (const [reported, mode] of codex) assert.equal(modeFromReported("codex", reported), mode, `codex ${reported}`);
+  const omp: [string, "bypass" | "prompting"][] = [
+    ["always-ask", "prompting"],
+    ["always-ask-cached", "prompting"],
+    ["write", "bypass"],
+    ["yolo", "bypass"],
+    ["something-new", "bypass"],
+  ];
+  for (const [reported, mode] of omp) assert.equal(modeFromReported("omp", reported), mode, `omp ${reported}`);
+  assert.equal(modeFromReported("omp", "plan"), "bypass", "plan is Codex's asking mode, not OMP's");
+  assert.equal(modeFromReported("opencode", "always-ask"), "bypass", "an agent with no asking modes listed reads as bypass");
+  for (const agent of ["codex", "omp"]) {
+    assert.equal(modeFromReported(agent, undefined), null, "nothing reported stays unknown");
+    assert.equal(modeFromReported(agent, ""), null);
+  }
+  const approvals: [string, "bypass" | "prompting"][] = [
+    ["untrusted", "prompting"],
+    ["never", "bypass"],
+    ["on-request", "bypass"],
+    ["on-failure", "bypass"],
+    ["something-new", "bypass"],
+  ];
+  for (const [approval, mode] of approvals) assert.equal(modeFromApproval(approval), mode, `approval ${approval}`);
+  assert.equal(modeFromApproval(undefined), null);
+  assert.equal(localSessionMode(null), "bypass", "a local session that never reported a mode counts as bypass");
+  assert.equal(localSessionMode("bypass"), "bypass");
+  assert.equal(localSessionMode("prompting"), "prompting");
 });
 
 test("hook input carries the tool name and up to 500 characters of the prompt, which is what current_task and last_tool are built from", () => {
