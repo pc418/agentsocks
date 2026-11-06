@@ -4,7 +4,7 @@
       "type": "table",
       "name": "threads",
       "tbl_name": "threads",
-      "sql": "CREATE TABLE threads (\n        thread_id TEXT PRIMARY KEY,\n        name TEXT NOT NULL,\n        cwd TEXT,\n        mode TEXT,\n        state TEXT NOT NULL DEFAULT 'unknown',\n        remote TEXT,\n        created_at INTEGER NOT NULL,\n        last_seen INTEGER NOT NULL,\n        pending_wake_at INTEGER,\n        wake_log TEXT NOT NULL DEFAULT '[]',\n        stop_streak INTEGER NOT NULL DEFAULT 0\n      , hooks_active INTEGER NOT NULL DEFAULT 0, current_task TEXT, last_tool TEXT, last_activity INTEGER, wake_hold_since INTEGER, exempt_wake_log TEXT NOT NULL DEFAULT '[]', subagent INTEGER, agent TEXT NOT NULL DEFAULT 'codex', driver_addr TEXT, driver_name TEXT, name_explicit INTEGER, driver_sid TEXT, driver_instructed_at INTEGER)"
+      "sql": "CREATE TABLE threads (\n        thread_id TEXT PRIMARY KEY,\n        name TEXT NOT NULL,\n        cwd TEXT,\n        mode TEXT,\n        state TEXT NOT NULL DEFAULT 'unknown',\n        remote TEXT,\n        created_at INTEGER NOT NULL,\n        last_seen INTEGER NOT NULL,\n        pending_wake_at INTEGER,\n        wake_log TEXT NOT NULL DEFAULT '[]',\n        stop_streak INTEGER NOT NULL DEFAULT 0\n      , hooks_active INTEGER NOT NULL DEFAULT 0, current_task TEXT, last_tool TEXT, last_activity INTEGER, wake_hold_since INTEGER, exempt_wake_log TEXT NOT NULL DEFAULT '[]', subagent INTEGER, agent TEXT NOT NULL DEFAULT 'codex', driver_addr TEXT, driver_name TEXT, name_explicit INTEGER, driver_sid TEXT, driver_instructed_at INTEGER, mode_rule INTEGER)"
     },
     {
       "type": "index",
@@ -478,6 +478,14 @@
       {
         "cid": 23,
         "name": "driver_instructed_at",
+        "type": "INTEGER",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "cid": 24,
+        "name": "mode_rule",
         "type": "INTEGER",
         "notnull": 0,
         "dflt_value": null,

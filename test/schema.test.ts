@@ -105,10 +105,10 @@ test("the v0.4 tables are created by their own steps after the shipped ones, and
   assert.deepEqual(dumpDatabase(path), first);
 });
 
-test("the v0.4 steps follow the shipped ones in the order channels and ratings, the gateway and then more agents added them", () => {
+test("the v0.4 steps follow the shipped ones in the order channels and ratings, the gateway, more agents and then sender modes added them", () => {
   assert.deepEqual(
     MIGRATIONS.slice(SHIPPED.length).map((m) => m.name),
-    ["create channel_members", "create asks and ask_targets", "create labels", "messages.received_at index", "gateway tables", "threads.agent", "threads.driver_addr, driver_name, name_explicit", "threads.driver_sid", "threads.driver_instructed_at"],
+    ["create channel_members", "create asks and ask_targets", "create labels", "messages.received_at index", "gateway tables", "threads.agent", "threads.driver_addr, driver_name, name_explicit", "threads.driver_sid", "threads.driver_instructed_at", "threads.mode_rule"],
   );
 });
 

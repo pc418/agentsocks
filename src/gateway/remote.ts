@@ -1,5 +1,6 @@
 import type { Broker } from "../broker.ts";
 import { cleanText } from "../limits.ts";
+import { MODE_RULE } from "../modes.ts";
 import { gatewayState, threadIdFor, type GatewayState, type PeerRow, type Via } from "./state.ts";
 
 export interface PeerSpec {
@@ -67,8 +68,8 @@ export async function ensurePeer(broker: Broker, spec: PeerSpec, now = Date.now(
 export async function ensureThread(broker: Broker, peer: PeerRow, now = Date.now()): Promise<void> {
   if (!broker.inboxes.has(peer.thread_id)) await broker.register(peer.thread_id, { state: "idle" });
   const thread = broker.store.getThread(peer.thread_id);
-  if (thread && (thread.name !== peer.name || thread.mode !== "prompting" || thread.state !== "idle" || thread.subagent !== 0)) {
-    broker.store.updateThread(peer.thread_id, { name: peer.name, mode: "prompting", state: "idle", subagent: 0, last_seen: now });
+  if (thread && (thread.name !== peer.name || thread.mode !== "prompting" || thread.mode_rule !== MODE_RULE || thread.state !== "idle" || thread.subagent !== 0)) {
+    broker.store.updateThread(peer.thread_id, { name: peer.name, mode: "prompting", mode_rule: MODE_RULE, state: "idle", subagent: 0, last_seen: now });
   }
 }
 

@@ -259,6 +259,10 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "threads.driver_instructed_at",
     up: addColumns("threads", [["driver_instructed_at", "INTEGER"]]),
   },
+  {
+    name: "threads.mode_rule",
+    up: addColumns("threads", [["mode_rule", "INTEGER"]]),
+  },
 ];
 
 export function migrate(db: DatabaseSync, steps: readonly Migration[] = MIGRATIONS): void {

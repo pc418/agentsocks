@@ -34,6 +34,7 @@ export interface ThreadRow {
   driver_name: string | null;
   driver_sid: string | null;
   driver_instructed_at: number | null;
+  mode_rule: number | null;
   name_explicit: number | null;
 }
 

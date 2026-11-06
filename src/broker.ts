@@ -49,7 +49,7 @@ import { exitAfterFlush } from "./exit.ts";
 import { listClaudeSessions, pidAlive, type ClaudeSession } from "./claude.ts";
 import { processArgs, buildHash } from "./procinfo.ts";
 import { findCodexThread } from "./codexstate.ts";
-import { modeFromApproval, modeFromReported } from "./modes.ts";
+import { MODE_RULE, modeFromApproval, modeFromReported } from "./modes.ts";
 import { SWEEP_STAGES, type SweepStage } from "./sweep/index.ts";
 import { OPS } from "./brokerops/index.ts";
 import { livePeerNames, normalizeSessionName, sanitizeSessionName, sessionNameRefusal } from "./brokerops/threads.ts";
@@ -534,15 +534,14 @@ export class Broker {
     const agent = isRemoteThread(this, threadId) ? "codex" : (agentOfThreadId(threadId) ?? info.agent ?? existing?.agent ?? "codex");
     let subagent: boolean | undefined = agent === "codex" ? undefined : false;
     const lacksDefaults = !existing || !existing.mode;
+    const staleMode = !!existing?.mode && existing.mode_rule !== MODE_RULE;
     let stateMode: ThreadRow["mode"] = null;
-    if (agent === "codex" && (lacksDefaults || existing.subagent === null)) {
+    if (agent === "codex" && (lacksDefaults || staleMode || existing.subagent === null)) {
       const known = await findCodexThread({ id: threadId });
       subagent = known?.subagent ?? (existing?.subagent === 1);
       if (known) {
-        if (lacksDefaults) {
-          info = { ...info, cwd: info.cwd ?? known.cwd };
-          stateMode = modeFromApproval(known.approvalMode);
-        }
+        if (lacksDefaults) info = { ...info, cwd: info.cwd ?? known.cwd };
+        if (lacksDefaults || staleMode) stateMode = modeFromApproval(known.approvalMode);
         if (!existing && known.name) {
           const title = cleanText(known.name, 64);
           const refusal = sessionNameRefusal(title, livePeerNames(this));
@@ -557,7 +556,10 @@ export class Broker {
     const fields: Partial<ThreadRow> = {};
     if (info.cwd) fields.cwd = info.cwd;
     const mode = modeFromReported(agent, info.permissionMode) ?? stateMode;
-    if (mode) fields.mode = mode;
+    if (mode) {
+      fields.mode = mode;
+      fields.mode_rule = MODE_RULE;
+    }
     if (info.remote) fields.remote = info.remote;
     if (info.state) fields.state = info.state;
     if (subagent !== undefined) fields.subagent = subagent ? 1 : 0;

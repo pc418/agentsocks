@@ -9,6 +9,10 @@ const ASKING_MODES: Readonly<Record<string, ReadonlySet<string>>> = {
 
 const ASKING_APPROVAL = "untrusted";
 
+// Which classification wrote threads.mode. A stored mode written under an earlier one (mode_rule null: every Codex
+// mode but bypassPermissions was prompting then) is derived again from the Codex state DB at the next registration.
+export const MODE_RULE = 1;
+
 export function modeFromReported(agent: string, reported: string | undefined | null): Mode | null {
   if (!reported) return null;
   return ASKING_MODES[agent]?.has(reported) ? "prompting" : "bypass";

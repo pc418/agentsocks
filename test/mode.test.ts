@@ -13,6 +13,7 @@ const FRESH = id(3);
 const UNTRUSTED = id(4);
 const AUTO = id(5);
 const HOOK_WINS = id(6);
+const LEGACY = id(7);
 
 before(async () => {
   const { DatabaseSync } = await import("node:sqlite");
@@ -28,6 +29,7 @@ before(async () => {
   insert.run(UNTRUSTED, "untrusted", "/work/untrusted", "untrusted", Date.now(), "cli", "user", "x");
   insert.run(AUTO, "auto", "/work/auto", "on-request", Date.now(), "cli", "user", "x");
   insert.run(HOOK_WINS, "hookwins", "/work/hook-wins", "untrusted", Date.now(), "cli", "user", "x");
+  insert.run(LEGACY, "legacy", "/work/legacy-state", "on-request", Date.now(), "cli", "user", "x");
   db.close();
   await broker.start();
 });
@@ -75,4 +77,14 @@ test("a hook's report wins over the state DB's approval policy", async () => {
   assert.equal(broker.store.getThread(HOOK_WINS)!.mode, "bypass", "the state DB says untrusted, the hook says default");
   await broker.hook({ threadId: HOOK_WINS, event: "PostToolUse", permissionMode: "plan" });
   assert.equal(broker.store.getThread(HOOK_WINS)!.mode, "prompting", "a later report changes it");
+});
+
+test("a mode stored by an earlier release is derived again from the state DB, and the hook's cwd is kept", async () => {
+  await broker.register(LEGACY, { cwd: "/work/legacy-hook" });
+  broker.store.updateThread(LEGACY, { mode: "prompting", mode_rule: null });
+  await broker.register(LEGACY, {});
+  const row = broker.store.getThread(LEGACY)!;
+  assert.equal(row.mode, "bypass", "on-request was stored as prompting before; it is bypass now");
+  assert.equal(row.cwd, "/work/legacy-hook");
+  assert.notEqual(row.mode_rule, null);
 });
