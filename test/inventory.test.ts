@@ -170,6 +170,7 @@ const MIGRATIONS_EXPECTED = [
   "threads.driver_addr, driver_name, name_explicit",
   "threads.driver_sid",
   "threads.driver_instructed_at",
+  "threads.mode_rule",
 ];
 
 test("inventory: every broker op is registered, exactly once, under its pinned name", () => {
