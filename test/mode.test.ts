@@ -14,6 +14,7 @@ const UNTRUSTED = id(4);
 const AUTO = id(5);
 const HOOK_WINS = id(6);
 const LEGACY = id(7);
+const ONE_REPORT = id(8);
 
 before(async () => {
   const { DatabaseSync } = await import("node:sqlite");
@@ -30,6 +31,7 @@ before(async () => {
   insert.run(AUTO, "auto", "/work/auto", "on-request", Date.now(), "cli", "user", "x");
   insert.run(HOOK_WINS, "hookwins", "/work/hook-wins", "untrusted", Date.now(), "cli", "user", "x");
   insert.run(LEGACY, "legacy", "/work/legacy-state", "on-request", Date.now(), "cli", "user", "x");
+  insert.run(ONE_REPORT, "", "/work/one-report-state", "never", Date.now(), "cli", "user", "x");
   db.close();
   await broker.start();
 });
@@ -87,4 +89,11 @@ test("a mode stored by an earlier release is derived again from the state DB, an
   assert.equal(row.mode, "bypass", "on-request was stored as prompting before; it is bypass now");
   assert.equal(row.cwd, "/work/legacy-hook");
   assert.notEqual(row.mode_rule, null);
+});
+
+test("a mode reported when the thread is first registered is kept by a later registration that reports none", async () => {
+  await broker.register(ONE_REPORT, { cwd: "/work/one-report", permissionMode: "plan" });
+  assert.equal(broker.store.getThread(ONE_REPORT)!.mode, "prompting");
+  await broker.register(ONE_REPORT, {});
+  assert.equal(broker.store.getThread(ONE_REPORT)!.mode, "prompting", "the state DB's never would read as bypass");
 });

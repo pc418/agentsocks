@@ -176,8 +176,8 @@ export function privateFile(path: string): void {
     const existing = this.getThread(threadId);
     if (!existing) {
       this.db
-        .prepare("INSERT INTO threads (thread_id, name, cwd, mode, state, remote, subagent, agent, name_explicit, created_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(threadId, fields.name ?? defaultName, fields.cwd ?? null, fields.mode ?? null, fields.state ?? "unknown", fields.remote ?? null, fields.subagent ?? null, fields.agent ?? "codex", fields.name_explicit ?? null, now, now);
+        .prepare("INSERT INTO threads (thread_id, name, cwd, mode, mode_rule, state, remote, subagent, agent, name_explicit, created_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(threadId, fields.name ?? defaultName, fields.cwd ?? null, fields.mode ?? null, fields.mode_rule ?? null, fields.state ?? "unknown", fields.remote ?? null, fields.subagent ?? null, fields.agent ?? "codex", fields.name_explicit ?? null, now, now);
     } else {
       this.updateThread(threadId, { ...fields, last_seen: now });
     }
